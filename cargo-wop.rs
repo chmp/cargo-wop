@@ -336,6 +336,9 @@ fn normalize_manifest(mut manifest: Value, target_path: impl AsRef<Path>) -> Res
     ensure_valid_package(root, &target_name)?;
     ensure_at_least_a_single_target(root)?;
 
+    // TODO: rewrite depdendencies by replacing relative paths with absolute ones
+
+    // TODO: refactor this into its own function
     if let Some(lib) = root.get_mut("lib") {
         patch_target(lib, &target_path, &target_name)?;
     }
