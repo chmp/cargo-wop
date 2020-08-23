@@ -1,0 +1,16 @@
+[package]
+name = "cargo-wop"
+version = "0.1.0"
+authors = ["Christopher Prohm"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[[bin]]
+name = "cargo-wop"
+path = "cargo-wop.rs"
+
+[dependencies]
+anyhow = "1.0"
+sha1 = "0.6.0"
+toml = "0.5"
