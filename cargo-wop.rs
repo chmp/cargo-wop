@@ -3,6 +3,7 @@
 //! ```cargo
 //! [dependencies]
 //! anyhow = "1.0"
+//! serde_json = "1.0"
 //! sha1 = "0.6.0"
 //! toml = "0.5"
 //! ```
@@ -12,9 +13,11 @@ use std::{
     fs::{self, File},
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
+    process::{Command, Stdio},
 };
 
 use anyhow::{anyhow, bail, ensure, Result};
+use serde_json::{self, Value as JsonValue};
 use sha1::Sha1;
 use toml::{self, Value};
 
@@ -22,29 +25,18 @@ fn main() -> Result<()> {
     let args = parse_args(std::env::args_os().skip(1).collect())?;
 
     match args {
-        Args::CargoCall(call) => {
-            let target = call.target.canonicalize()?;
-            let file = File::open(target.as_path())?;
+        Args::GenericCargoCall(call) => {
+            let project_info = prepare_cargo_call(&call)?;
+            execute_cargo_call(&call, &project_info)?;
+        }
+        Args::BuildCargoCall(call) => {
+            let project_info = prepare_cargo_call(&call)?;
+            execute_cargo_call(&call, &project_info)?;
+            let artifacts = collect_build_artifacts(&call, &project_info)?;
 
-            let project_dir = find_project_dir(target.as_path())?;
+            // TODO: copy the build artifacts into the current directory
 
-            let manifest = parse_manifest(file)?;
-
-            let manifest: Value = toml::from_str(manifest.as_str())?;
-            let manifest = normalize_manifest(manifest, target.as_path())?;
-            let manifest = toml::to_string(&manifest)?;
-
-            fs::create_dir_all(&project_dir)?;
-
-            println!("{:?}", manifest);
-            println!("{}", project_dir.display());
-
-            let file = project_dir.join("Cargo.toml");
-            let mut file = File::create(file)?;
-            file.write_all(manifest.as_bytes())?;
-
-            let file = project_dir.join(target.file_name().unwrap());
-            fs::copy(target.as_path(), file)?;
+            println!("Generated artifacts: {:?}", artifacts);
         }
     }
 
@@ -76,6 +68,10 @@ fn parse_args(args: Vec<OsString>) -> Result<Args> {
             args.len() >= 2,
             "Need at least two arguments for a cargo command"
         );
+
+        // TODO: modify args to parse debug flag, insert release otherwise
+        // TODO: modify args to insert cargo / command separators (by using --)
+
         let result = CargoCall::new(
             command.to_owned(),
             PathBuf::from(args[1].to_owned()),
@@ -89,16 +85,159 @@ fn parse_args(args: Vec<OsString>) -> Result<Args> {
 
 fn is_cargo_command(command: &str) -> bool {
     match command {
-        "run" => true,
-        "build" => true,
+        "run" | "build" | "test" => true,
         _ => false,
     }
+}
+
+/// Prepare the cargo project directory
+///
+/// This commands writes the manifest and copies the source file. After this
+/// step, cargo calls can be made against this directory.
+///
+fn prepare_cargo_call(call: &CargoCall) -> Result<ProjectInfo> {
+    let target = call.target.canonicalize()?;
+    let file = File::open(target.as_path())?;
+
+    let project_dir = find_project_dir(target.as_path())?;
+
+    let manifest = parse_manifest(file)?;
+
+    let manifest: Value = toml::from_str(manifest.as_str())?;
+    let manifest = normalize_manifest(manifest, target.as_path())?;
+    let manifest = toml::to_string(&manifest)?;
+
+    fs::create_dir_all(&project_dir)?;
+
+    let manifest_path = project_dir.join("Cargo.toml");
+    let mut file = File::create(manifest_path.clone())?;
+    file.write_all(manifest.as_bytes())?;
+
+    let file = project_dir.join(target.file_name().unwrap());
+    fs::copy(target.as_path(), file)?;
+
+    // TODO: get the name from the normalized manifest in case the user has overwritten it
+    let name = target
+        .file_stem()
+        .ok_or_else(|| anyhow!("Could not get name"))?
+        .to_str()
+        .ok_or_else(|| anyhow!("Could not get utf8 rep"))?
+        .to_owned();
+
+    Ok(ProjectInfo {
+        manifest_path,
+        name,
+    })
+}
+
+/// Execute a cargo call
+///
+fn execute_cargo_call(call: &CargoCall, project_info: &ProjectInfo) -> Result<()> {
+    let exit_code = build_cargo_command(&call, &project_info, &[])
+        .status()?
+        .code()
+        .unwrap_or_default();
+
+    ensure!(
+        exit_code == 0,
+        "Error during running cargo. Exit code {}",
+        exit_code
+    );
+
+    Ok(())
+}
+
+/// Execute a cargo call and collect any generated artifacts
+///
+fn collect_build_artifacts(call: &CargoCall, project_info: &ProjectInfo) -> Result<Vec<String>> {
+    let output = build_cargo_command(&call, &project_info, &["--message-format", "json"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()?;
+
+    let exit_code = output.status.code().unwrap_or_default();
+    ensure!(
+        exit_code == 0,
+        "Error during running cargo. Exit code {}",
+        exit_code
+    );
+
+    let artifacts = parse_build_output(output.stdout.as_slice(), &project_info)?;
+    Ok(artifacts)
+}
+
+/// Parse the output of a cargo build step
+///
+fn parse_build_output(output: &[u8], project_info: &ProjectInfo) -> Result<Vec<String>> {
+    let mut result = Vec::new();
+    let reader = BufReader::new(output);
+    for line in reader.lines() {
+        let line = line?;
+        let value: JsonValue = serde_json::from_str(&line)?;
+
+        let reason = value
+            .get("reason")
+            .and_then(JsonValue::as_str)
+            .ok_or_else(|| anyhow!("Invalid cargo output reason not a string"))?;
+
+        if reason != "compiler-artifact" {
+            continue;
+        }
+
+        let package_id = value
+            .get("package_id")
+            .and_then(JsonValue::as_str)
+            .ok_or_else(|| anyhow!("Invalid compiler-artifact: package_id not a string"))?;
+
+        let needle = format!("{} ", project_info.name);
+        if !package_id.starts_with(&needle) {
+            continue;
+        }
+
+        let filenames = value
+            .get("filenames")
+            .and_then(JsonValue::as_array)
+            .ok_or_else(|| anyhow!("Invalid compiler-artifact: filenames not an array"))?;
+
+        for filename in filenames {
+            let filename = filename
+                .as_str()
+                .ok_or_else(|| anyhow!("Invalid file name not a string"))?;
+            result.push(filename.to_owned());
+        }
+    }
+    Ok(result)
+}
+
+/// A helper to build a cargo call command
+///
+fn build_cargo_command(
+    call: &CargoCall,
+    project_info: &ProjectInfo,
+    extra_args: &[&str],
+) -> Command {
+    let mut result = Command::new("cargo");
+
+    result
+        .arg(call.command.as_str())
+        .arg("--manifest-path")
+        .arg(project_info.manifest_path.as_os_str())
+        .args(extra_args)
+        .args(call.args.iter());
+
+    result
+}
+
+struct ProjectInfo {
+    name: String,
+    manifest_path: PathBuf,
 }
 
 #[derive(Debug, PartialEq)]
 enum Args {
     /// Execute a direct cargo command
-    CargoCall(CargoCall),
+    GenericCargoCall(CargoCall),
+    BuildCargoCall(CargoCall),
 }
 
 #[derive(Debug, PartialEq)]
@@ -118,7 +257,11 @@ impl CargoCall {
     }
 
     fn to_args(self) -> Args {
-        Args::CargoCall(self)
+        if self.command != "build" {
+            Args::GenericCargoCall(self)
+        } else {
+            Args::BuildCargoCall(self)
+        }
     }
 }
 
