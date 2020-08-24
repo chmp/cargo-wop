@@ -16,7 +16,8 @@ Usage:
 cargo wop my-script.rs
 cargo wop run my-script.rs
 
-# build  artifacts declared by the script and copy them into the working directory
+# build  artifacts declared by the script 
+# and copy them into the working directory
 cargo wop build my-script.rs
 
 # Run the tests
@@ -45,6 +46,8 @@ Some commands use additional rules:
 - `build`: build is executed twice. Once to build the package and a second time
   to determine the generated build artifacts and copy them into the local
   folder
+- `build` and `run` default to release builds. To disable this behavior pass the
+  `--debug` argument
 
 ## Specifying dependencies
 
