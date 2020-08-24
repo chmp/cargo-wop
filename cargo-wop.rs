@@ -36,6 +36,13 @@ fn main() -> Result<()> {
 
             copy_build_artifacts(artifacts, std::env::current_dir()?)?;
         }
+        Args::Manifest(target) => {
+            // TODO: remove the duplication of file + parse + normalize?
+            let file = File::open(target.as_path())?;
+            let manifest = parse_manifest(file)?;
+            let manifest = normalize_manifest(manifest, target.as_path())?;
+            print!("{}", toml::to_string(&manifest)?);
+        }
     }
 
     Ok(())
@@ -67,8 +74,10 @@ fn parse_args(args: Vec<OsString>) -> Result<Args> {
             3,
         )
     };
-    // TODO: modify args to parse debug flag, insert release otherwise
-    // TODO: modify args to insert cargo / command separators (by using --)
+
+    if command == "manifest" {
+        return Ok(Args::Manifest(target.to_owned()));
+    }
 
     if !is_cargo_command(&command) {
         bail!("Unknown command: {}", command);
@@ -102,8 +111,6 @@ fn prepare_cargo_call(call: &CargoCall) -> Result<ProjectInfo> {
     let project_dir = find_project_dir(target.as_path())?;
 
     let manifest = parse_manifest(file)?;
-
-    let manifest: Value = toml::from_str(manifest.as_str())?;
     let manifest = normalize_manifest(manifest, target.as_path())?;
     let manifest = toml::to_string(&manifest)?;
 
@@ -256,6 +263,7 @@ enum Args {
     /// Execute a direct cargo command
     GenericCargoCall(CargoCall),
     BuildCargoCall(CargoCall),
+    Manifest(PathBuf),
 }
 
 #[derive(Debug, PartialEq)]
@@ -421,6 +429,7 @@ fn hash_path(path: impl AsRef<Path>) -> String {
 fn normalize_manifest(mut manifest: Value, target_path: impl AsRef<Path>) -> Result<Value> {
     let project_dir = target_path
         .as_ref()
+        .canonicalize()?
         .parent()
         .ok_or_else(|| anyhow!("Invalid file path"))?
         .to_owned();
@@ -516,7 +525,11 @@ fn ensure_at_least_a_single_target(root: &mut toml::map::Map<String, Value>) -> 
 }
 
 /// Patch all available target definition
-fn patch_all_targets(root: &mut toml::map::Map<String, Value>, path: &str, name: &str) -> Result<()> {
+fn patch_all_targets(
+    root: &mut toml::map::Map<String, Value>,
+    path: &str,
+    name: &str,
+) -> Result<()> {
     if let Some(lib) = root.get_mut("lib") {
         patch_target(lib, &path, &name)?;
     }
@@ -530,7 +543,7 @@ fn patch_all_targets(root: &mut toml::map::Map<String, Value>, path: &str, name:
             patch_target(bin, &path, &name)?;
         }
     }
-    
+
     Ok(())
 }
 
@@ -550,7 +563,10 @@ fn patch_target(target: &mut Value, path: &str, name: &str) -> Result<()> {
 
 /// Replace all path dependencies with absolute paths
 ///
-fn patch_all_dependencies(root: &mut toml::map::Map<String, Value>, project_dir: &Path) -> Result<()> {
+fn patch_all_dependencies(
+    root: &mut toml::map::Map<String, Value>,
+    project_dir: &Path,
+) -> Result<()> {
     for dep_root_key in &["dependencies", "dev-dependencies", "build-dependencies"] {
         if let Some(dep_root) = root.get_mut(*dep_root_key) {
             let dep_root = dep_root
@@ -573,7 +589,7 @@ fn patch_all_dependencies(root: &mut toml::map::Map<String, Value>, project_dir:
                     .unwrap()
                     .as_str()
                     .ok_or_else(|| anyhow!("Invalid manifest: non string path"))?;
-                let path = project_dir.join(path);
+                let path = project_dir.join(path).canonicalize()?;
                 let path = path
                     .to_str()
                     .ok_or_else(|| anyhow!("Cannot interpret dependency path a string"))?;
@@ -587,7 +603,7 @@ fn patch_all_dependencies(root: &mut toml::map::Map<String, Value>, project_dir:
 
 /// Parse the manifest from the initial doc comment
 ///
-fn parse_manifest(reader: impl Read) -> Result<String> {
+fn parse_manifest(reader: impl Read) -> Result<Value> {
     let reader = BufReader::new(reader);
 
     let mut state = ParseState::Start;
@@ -598,8 +614,10 @@ fn parse_manifest(reader: impl Read) -> Result<String> {
         let line_start = LineStart::from(line.as_str());
 
         state = match (state, line_start) {
-            (ParseState::Start, LineStart::Other) => return Ok(String::new()),
-            (ParseState::DocComment, LineStart::Other) => return Ok(String::new()),
+            (ParseState::Start, LineStart::Other) => return Ok(Value::Table(Default::default())),
+            (ParseState::DocComment, LineStart::Other) => {
+                return Ok(Value::Table(Default::default()))
+            }
             (ParseState::Start, LineStart::DocComment) => ParseState::DocComment,
             (ParseState::Start, LineStart::ManifestEnd) => state,
             (ParseState::DocComment, LineStart::DocComment) => state,
@@ -613,7 +631,7 @@ fn parse_manifest(reader: impl Read) -> Result<String> {
                 result.push('\n');
                 state
             }
-            (ParseState::Manifest, LineStart::ManifestEnd) => return Ok(result),
+            (ParseState::Manifest, LineStart::ManifestEnd) => return Ok(toml::from_str(&result)?),
             (ParseState::Manifest, LineStart::ManifestStart) => bail!("Invalid manifest"),
             (ParseState::Manifest, LineStart::Other) => bail!("Invalid manifest"),
         };
@@ -623,7 +641,7 @@ fn parse_manifest(reader: impl Read) -> Result<String> {
         bail!("Incomplete manifest");
     }
 
-    return Ok(String::new());
+    return Ok(Value::Table(Default::default()));
 
     #[derive(Debug, PartialEq, Clone, Copy)]
     enum ParseState {
@@ -724,15 +742,16 @@ mod test_parse_manifest {
 use std::fs;"
 "#;
 
-    const EXAMPLE_MANIFEST: &str = r#"[dependencies]
-anyhow = "1.0"
-sha1 = "0.6.0"
-"#;
+    const EXAMPLE_MANIFEST: &str = r#"
+        [dependencies]
+        anyhow = "1.0"
+        sha1 = "0.6.0"
+    "#;
 
     #[test]
     fn example() -> Result<()> {
         let actual = parse_manifest(EXAMPLE.as_bytes())?;
-        let expected = String::from(EXAMPLE_MANIFEST);
+        let expected = toml::from_str(EXAMPLE_MANIFEST)?;
 
         assert_eq!(actual, expected);
         Ok(())
