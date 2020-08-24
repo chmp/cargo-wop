@@ -94,7 +94,8 @@ fn has_extension(s: &OsStr) -> bool {
 
 fn is_cargo_command(command: &str) -> bool {
     match command {
-        "run" | "build" | "test" | "check" => true,
+        "bench" | "build" | "check" | "clean" | "locate-project" | "metadata" | "pkgid" | "run"
+        | "tree" | "test" | "verify-project" => true,
         _ => false,
     }
 }

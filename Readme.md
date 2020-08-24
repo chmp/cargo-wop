@@ -24,8 +24,9 @@ cargo wop test my-script.rs
 ```
 ## How arguments are interpreted
 
-At the moment the following cargo commands are supported: `run`, `build`,
-`test`, `check`. For most commands `cargo-wop` rewrites the command-line as
+At the moment the following cargo commands are supported: `bench`, `build`,
+`check`, `clean`, `locate-project`, `metadata`, `pkgid`, `run`, `tree`, `test`,
+`verify-project`. For most commands `cargo-wop` rewrites the command-line as
 follows:
 
 ```bash
