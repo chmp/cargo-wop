@@ -419,6 +419,11 @@ fn hash_path(path: impl AsRef<Path>) -> String {
 /// target it sets the correct path to the source file.
 ///
 fn normalize_manifest(mut manifest: Value, target_path: impl AsRef<Path>) -> Result<Value> {
+    let project_dir = target_path
+        .as_ref()
+        .parent()
+        .ok_or_else(|| anyhow!("Invalid file path"))?
+        .to_owned();
     let (target_path, target_name) = get_path_info(target_path)?;
 
     let root = manifest
@@ -428,22 +433,8 @@ fn normalize_manifest(mut manifest: Value, target_path: impl AsRef<Path>) -> Res
     ensure_valid_package(root, &target_name)?;
     ensure_at_least_a_single_target(root)?;
 
-    // TODO: rewrite depdendencies by replacing relative paths with absolute ones
-
-    // TODO: refactor this into its own function
-    if let Some(lib) = root.get_mut("lib") {
-        patch_target(lib, &target_path, &target_name)?;
-    }
-
-    if let Some(bins) = root.get_mut("bin") {
-        let bins = bins
-            .as_array_mut()
-            .ok_or_else(|| anyhow!("Invalid manifest: bin not an array"))?;
-
-        for bin in bins {
-            patch_target(bin, &target_path, &target_name)?;
-        }
-    }
+    patch_all_targets(root, &target_path, &target_name)?;
+    patch_all_dependencies(root, &project_dir)?;
 
     Ok(manifest)
 }
@@ -524,6 +515,25 @@ fn ensure_at_least_a_single_target(root: &mut toml::map::Map<String, Value>) -> 
     Ok(())
 }
 
+/// Patch all available target definition
+fn patch_all_targets(root: &mut toml::map::Map<String, Value>, path: &str, name: &str) -> Result<()> {
+    if let Some(lib) = root.get_mut("lib") {
+        patch_target(lib, &path, &name)?;
+    }
+
+    if let Some(bins) = root.get_mut("bin") {
+        let bins = bins
+            .as_array_mut()
+            .ok_or_else(|| anyhow!("Invalid manifest: bin not an array"))?;
+
+        for bin in bins {
+            patch_target(bin, &path, &name)?;
+        }
+    }
+    
+    Ok(())
+}
+
 /// Helper for normalize manifest: patch the target definition to use the correct file path
 fn patch_target(target: &mut Value, path: &str, name: &str) -> Result<()> {
     let bin = target
@@ -533,6 +543,43 @@ fn patch_target(target: &mut Value, path: &str, name: &str) -> Result<()> {
 
     if !bin.contains_key("name") {
         bin.insert(String::from("name"), Value::String(name.to_owned()));
+    }
+
+    Ok(())
+}
+
+/// Replace all path dependencies with absolute paths
+///
+fn patch_all_dependencies(root: &mut toml::map::Map<String, Value>, project_dir: &Path) -> Result<()> {
+    for dep_root_key in &["dependencies", "dev-dependencies", "build-dependencies"] {
+        if let Some(dep_root) = root.get_mut(*dep_root_key) {
+            let dep_root = dep_root
+                .as_table_mut()
+                .ok_or_else(|| anyhow!("Invalid manifest {} not an array", *dep_root_key))?;
+
+            for dep in dep_root {
+                let dep = dep.1;
+                let dep = match dep.as_table_mut() {
+                    Some(dep) => dep,
+                    None => continue,
+                };
+
+                if !dep.contains_key("path") {
+                    continue;
+                }
+
+                let path = dep
+                    .get("path")
+                    .unwrap()
+                    .as_str()
+                    .ok_or_else(|| anyhow!("Invalid manifest: non string path"))?;
+                let path = project_dir.join(path);
+                let path = path
+                    .to_str()
+                    .ok_or_else(|| anyhow!("Cannot interpret dependency path a string"))?;
+                dep.insert(String::from("path"), path.into());
+            }
+        }
     }
 
     Ok(())
