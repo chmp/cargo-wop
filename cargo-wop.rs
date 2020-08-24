@@ -30,12 +30,12 @@ fn main_impl() -> Result<i32> {
 
     match args {
         Args::GenericCargoCall(call) => {
-            let project_info = prepare_cargo_call(&call)?;
+            let project_info = prepare_cargo_call(&call.target)?;
             let exit_code = execute_cargo_call(&call, &project_info)?;
             Ok(exit_code)
         }
         Args::BuildCargoCall(call) => {
-            let project_info = prepare_cargo_call(&call)?;
+            let project_info = prepare_cargo_call(&call.target)?;
             let result = execute_cargo_call(&call, &project_info)?;
             ensure!(
                 result == 0,
@@ -47,17 +47,13 @@ fn main_impl() -> Result<i32> {
         }
         Args::InstallCargoCall(call) => {
             // TODO: clean this up
-            let project_info = prepare_cargo_call(&call)?;
-            let manifest_dir = project_info
-                .manifest_path
-                .parent()
-                .ok_or_else(|| anyhow!("Manifest path without parent"))?;
+            let project_info = prepare_cargo_call(&call.target)?;
 
             let mut command = Command::new("cargo");
             command
                 .arg(call.command.as_str())
                 .arg("--path")
-                .arg(manifest_dir.as_os_str())
+                .arg(&project_info.manifest_dir)
                 .args(call.args.iter());
 
             let exit_code = command.status()?.code().unwrap_or_default();
@@ -70,6 +66,16 @@ fn main_impl() -> Result<i32> {
             let manifest = normalize_manifest(manifest, target.as_path())?;
             print!("{}", toml::to_string(&manifest)?);
             Ok(0)
+        }
+        Args::Exec(exec) => {
+            let project_info = prepare_cargo_call(exec.target.as_path())?;
+            let mut command = Command::new(&exec.command);
+            command
+                .args(exec.args.iter().cloned())
+                .current_dir(&project_info.manifest_dir);
+
+            let exit_code = command.status()?.code().unwrap_or_default();
+            Ok(exit_code)
         }
     }
 }
@@ -108,6 +114,15 @@ fn parse_args(args: Vec<OsString>) -> Result<Args> {
         );
         return Ok(Args::Manifest(target));
     }
+    if command == "exec" {
+        ensure!(args.len() > consumed_args, "Need at least an argument");
+        let exec = Exec {
+            target: target,
+            command: args[consumed_args].clone(),
+            args: args[(consumed_args + 1)..].to_vec(),
+        };
+        return Ok(Args::Exec(exec));
+    }
 
     if !is_cargo_command(&command) {
         bail!("Unknown command: {}", command);
@@ -136,23 +151,24 @@ fn is_cargo_command(command: &str) -> bool {
 /// This commands writes the manifest and copies the source file. After this
 /// step, cargo calls can be made against this directory.
 ///
-fn prepare_cargo_call(call: &CargoCall) -> Result<ProjectInfo> {
-    let target = call.target.canonicalize()?;
+fn prepare_cargo_call(target: impl AsRef<Path>) -> Result<ProjectInfo> {
+    let target = target.as_ref().canonicalize()?;
     let file = File::open(target.as_path())?;
 
-    let project_dir = find_project_dir(target.as_path())?;
+    let manifest_dir = find_project_dir(target.as_path())?;
 
     let manifest = parse_manifest(file)?;
     let manifest = normalize_manifest(manifest, target.as_path())?;
     let manifest = toml::to_string(&manifest)?;
 
-    fs::create_dir_all(&project_dir)?;
+    fs::create_dir_all(&manifest_dir)?;
 
-    let manifest_path = project_dir.join("Cargo.toml");
+    let manifest_path = manifest_dir.join("Cargo.toml");
+
     let mut file = File::create(manifest_path.clone())?;
     file.write_all(manifest.as_bytes())?;
 
-    let file = project_dir.join(target.file_name().unwrap());
+    let file = manifest_dir.join(target.file_name().unwrap());
     fs::copy(target.as_path(), file)?;
 
     // TODO: get the name from the normalized manifest in case the user has overwritten it
@@ -165,6 +181,7 @@ fn prepare_cargo_call(call: &CargoCall) -> Result<ProjectInfo> {
 
     Ok(ProjectInfo {
         manifest_path,
+        manifest_dir,
         name,
     })
 }
@@ -281,6 +298,7 @@ where
 struct ProjectInfo {
     name: String,
     manifest_path: PathBuf,
+    manifest_dir: PathBuf,
 }
 
 #[derive(Debug, PartialEq)]
@@ -290,11 +308,19 @@ enum Args {
     BuildCargoCall(CargoCall),
     InstallCargoCall(CargoCall),
     Manifest(PathBuf),
+    Exec(Exec),
 }
 
 #[derive(Debug, PartialEq)]
 struct CargoCall {
     command: String,
+    target: PathBuf,
+    args: Vec<OsString>,
+}
+
+#[derive(Debug, PartialEq)]
+struct Exec {
+    command: OsString,
     target: PathBuf,
     args: Vec<OsString>,
 }
@@ -713,15 +739,17 @@ mod test_parse_args {
     #[test]
     fn example_implicit_run_debug() {
         assert_eq!(
-            parse_args(&["wop", "example.rs", "--debug", "--"]).unwrap(),
-            CargoCall::new("run", "example.rs").into_args()
+            parse_args(&["wop", "example.rs"]).unwrap(),
+            CargoCall::new("run", "example.rs",)
+                .with_args(&["--release"])
+                .into_args()
         );
     }
 
     #[test]
     fn example_run_debug() {
         assert_eq!(
-            parse_args(&["wop", "run", "example.rs", "--debug", "--"]).unwrap(),
+            parse_args(&["wop", "run-debug", "example.rs"]).unwrap(),
             CargoCall::new("run", "example.rs").into_args()
         );
     }

@@ -34,7 +34,7 @@ the command-line as follows:
 # Original command-line
 cargo wop [cargo-command] [script] [args...]
 
-# Rewritten commandline
+# Rewritten command line
 cargo [cargo-command] --manifest-path [generated_manifest] [args...]
 ```
 
@@ -49,6 +49,11 @@ Some commands use additional rules:
   `build-debug` and `run-debug` commands.
 - `install`: no manifest path is added, but the `--path` argument to the
   manifest directory
+
+Custom commands:
+
+- `exec` execute the command after the source inside the manifest directory
+- `manifest`: print out the generated manifest
 
 ## Specifying dependencies
 
