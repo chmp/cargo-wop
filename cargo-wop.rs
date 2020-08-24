@@ -121,8 +121,8 @@ fn has_extension(s: &OsStr) -> bool {
 
 fn is_cargo_command(command: &str) -> bool {
     match command {
-        "bench" | "build" | "check" | "clean" | "install" | "locate-project" | "metadata"
-        | "pkgid" | "run" | "tree" | "test" | "verify-project" => true,
+        "bench" | "build" | "check" | "clean" | "clippy" | "install" | "locate-project"
+        | "metadata" | "pkgid" | "run" | "tree" | "test" | "verify-project" => true,
         _ => false,
     }
 }
