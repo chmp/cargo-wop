@@ -36,7 +36,7 @@ fn main() -> Result<()> {
 
             copy_build_artifacts(artifacts, std::env::current_dir()?)?;
         }
-        Args::IntstallCargoCall(call) => {
+        Args::InstallCargoCall(call) => {
             // TODO: clean this up
             let project_info = prepare_cargo_call(&call)?;
             let manifest_dir = project_info
@@ -287,7 +287,7 @@ enum Args {
     /// Execute a direct cargo command
     GenericCargoCall(CargoCall),
     BuildCargoCall(CargoCall),
-    IntstallCargoCall(CargoCall),
+    InstallCargoCall(CargoCall),
     Manifest(PathBuf),
 }
 
@@ -378,7 +378,7 @@ impl CargoCall {
     fn to_args(self) -> Args {
         match self.command.as_str() {
             "build" => Args::BuildCargoCall(self),
-            "install" => Args::IntstallCargoCall(self),
+            "install" => Args::InstallCargoCall(self),
             _ => Args::GenericCargoCall(self),
         }
     }
