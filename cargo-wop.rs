@@ -103,7 +103,7 @@ fn parse_args(args: Vec<OsString>) -> Result<Args> {
             args.len() == consumed_args,
             "The manifest command does not take additional arguments"
         );
-        return Ok(Args::Manifest(target.to_owned()));
+        return Ok(Args::Manifest(target));
     }
 
     if !is_cargo_command(&command) {
@@ -112,7 +112,7 @@ fn parse_args(args: Vec<OsString>) -> Result<Args> {
     Ok(CargoCall::new(command, target)
         .with_args(args.iter().skip(consumed_args))
         .normalize()?
-        .to_args())
+        .into_args())
 }
 
 fn has_extension(s: &OsStr) -> bool {
@@ -379,7 +379,7 @@ impl CargoCall {
         }
     }
 
-    fn to_args(self) -> Args {
+    fn into_args(self) -> Args {
         match self.command.as_str() {
             "build" => Args::BuildCargoCall(self),
             "install" => Args::InstallCargoCall(self),
@@ -723,7 +723,7 @@ mod test_parse_args {
             parse_args(&["wop", "example.rs"]).unwrap(),
             CargoCall::new("run", "example.rs")
                 .with_args(&["--release"])
-                .to_args()
+                .into_args()
         );
     }
 
@@ -731,7 +731,7 @@ mod test_parse_args {
     fn example_implicit_run_debug() {
         assert_eq!(
             parse_args(&["wop", "example.rs", "--debug", "--"]).unwrap(),
-            CargoCall::new("run", "example.rs").to_args()
+            CargoCall::new("run", "example.rs").into_args()
         );
     }
 
@@ -739,7 +739,7 @@ mod test_parse_args {
     fn example_run_debug() {
         assert_eq!(
             parse_args(&["wop", "run", "example.rs", "--debug", "--"]).unwrap(),
-            CargoCall::new("run", "example.rs").to_args()
+            CargoCall::new("run", "example.rs").into_args()
         );
     }
 
@@ -748,7 +748,7 @@ mod test_parse_args {
         let actual = parse_args(&["wop", "build", "example.rs"]).unwrap();
         let expected = CargoCall::new("build", "example.rs")
             .with_args(&["--release"])
-            .to_args();
+            .into_args();
 
         assert_eq!(actual, expected);
     }
