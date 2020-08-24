@@ -333,20 +333,15 @@ impl CargoCall {
         if let "build" | "run" = self.command.as_str() {
             cargo_args.push(OsString::from("--release"));
         }
-        
-        let new_args = match (!cargo_args.is_empty(), !commands_args.is_empty()) {
-            (false, false) => Vec::new(),
-            (true, false) => cargo_args,
-            (_, true) => {
-                let mut result = Vec::new();
-                result.extend(cargo_args);
-                result.push(OsString::from("--"));
-                result.extend(commands_args.iter().cloned());
-                result
-            }
-        };
 
-        self.args = new_args;
+        self.args = if commands_args.is_empty() {
+            cargo_args
+        } else {
+            let mut new_args = cargo_args;
+            new_args.push(OsString::from("--"));
+            new_args.extend(commands_args.iter().cloned());
+            new_args
+        };
 
         self.command = match self.command.as_str() {
             "build-debug" => String::from("build"),
