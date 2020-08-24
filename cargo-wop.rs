@@ -99,6 +99,10 @@ fn parse_args(args: Vec<OsString>) -> Result<Args> {
     };
 
     if command == "manifest" {
+        ensure!(
+            args.len() == consumed_args,
+            "The manifest command does not take additional arguments"
+        );
         return Ok(Args::Manifest(target.to_owned()));
     }
 
