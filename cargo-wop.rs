@@ -9,7 +9,7 @@
 //! ```
 //!
 use std::{
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     fs::{self, File},
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
@@ -34,9 +34,7 @@ fn main() -> Result<()> {
             execute_cargo_call(&call, &project_info)?;
             let artifacts = collect_build_artifacts(&call, &project_info)?;
 
-            // TODO: copy the build artifacts into the current directory
-
-            println!("Generated artifacts: {:?}", artifacts);
+            copy_build_artifacts(artifacts, std::env::current_dir()?)?;
         }
     }
 
@@ -46,46 +44,48 @@ fn main() -> Result<()> {
 /// Parse the command line arguments
 ///
 fn parse_args(args: Vec<OsString>) -> Result<Args> {
-    ensure!(args.len() >= 1, "Need at least a single argument");
+    ensure!(
+        args.len() >= 2,
+        "Need at least two  arguments: <wop [source-file]> or <wop [command] [source-file]>"
+    );
+    ensure!(args[0] == "wop", "First argument must be wop");
 
-    let first_path = AsRef::<Path>::as_ref(&args[0]);
-    if first_path.extension().is_some() {
-        let first_path = first_path.to_owned();
-        let result = CargoCall::new(
-            String::from("run"),
-            first_path,
-            args.into_iter().skip(1).collect(),
-        );
-        return Ok(result.to_args());
-    }
-
-    let command = args[0]
-        .to_str()
-        .ok_or_else(|| anyhow!("Cannot interpret first argument as string"))?;
-
-    if is_cargo_command(command) {
+    let (command, target, consumed_args) = if has_extension(args[1].as_os_str()) {
+        (String::from("run"), PathBuf::from(&args[1]), 2)
+    } else {
         ensure!(
-            args.len() >= 2,
-            "Need at least two arguments for a cargo command"
+            args.len() >= 3,
+            "Need at least three arguments: <wop [command] [source-file]>"
         );
 
-        // TODO: modify args to parse debug flag, insert release otherwise
-        // TODO: modify args to insert cargo / command separators (by using --)
+        (
+            args[1]
+                .to_str()
+                .ok_or_else(|| anyhow!("Cannot interpret first argument as string"))?
+                .to_owned(),
+            PathBuf::from(&args[2]),
+            3,
+        )
+    };
+    // TODO: modify args to parse debug flag, insert release otherwise
+    // TODO: modify args to insert cargo / command separators (by using --)
 
-        let result = CargoCall::new(
-            command.to_owned(),
-            PathBuf::from(args[1].to_owned()),
-            args.iter().skip(2).cloned().collect(),
-        );
-        return Ok(result.to_args());
+    if !is_cargo_command(&command) {
+        bail!("Unknown command: {}", command);
     }
+    Ok(CargoCall::new(command, target)
+        .with_args(args.iter().skip(consumed_args))
+        .normalize()?
+        .to_args())
+}
 
-    bail!("Unknown command: {}", command);
+fn has_extension(s: &OsStr) -> bool {
+    AsRef::<Path>::as_ref(s).extension().is_some()
 }
 
 fn is_cargo_command(command: &str) -> bool {
     match command {
-        "run" | "build" | "test" => true,
+        "run" | "build" | "test" | "check" => true,
         _ => false,
     }
 }
@@ -228,6 +228,24 @@ fn build_cargo_command(
     result
 }
 
+fn copy_build_artifacts<I, P, T>(from: I, to: T) -> Result<()>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+    T: AsRef<Path>,
+{
+    for src in from {
+        let src = src.as_ref();
+        let dst = to.as_ref().join(
+            src.file_name()
+                .ok_or_else(|| anyhow!("Invalid source filename"))?,
+        );
+
+        fs::copy(src, dst)?;
+    }
+    Ok(())
+}
+
 struct ProjectInfo {
     name: String,
     manifest_path: PathBuf,
@@ -248,11 +266,79 @@ struct CargoCall {
 }
 
 impl CargoCall {
-    fn new(command: String, target: PathBuf, args: Vec<OsString>) -> Self {
+    fn new<Command, Target>(command: Command, target: Target) -> Self
+    where
+        Command: Into<String>,
+        Target: Into<PathBuf>,
+    {
         Self {
-            command,
-            target,
-            args,
+            command: command.into(),
+            target: target.into(),
+            args: Vec::new(),
+        }
+    }
+
+    fn with_args<Args, Arg>(mut self, args: Args) -> Self
+    where
+        Args: IntoIterator<Item = Arg>,
+        Arg: Into<OsString>,
+    {
+        self.args.extend(args.into_iter().map(|arg| arg.into()));
+        self
+    }
+
+    /// Normalize the arguments
+    fn normalize(mut self) -> Result<Self> {
+        let (cargo_args, commands_args) = self.split_args();
+
+        let mut cargo_args = cargo_args.to_owned();
+        if let "build" | "run" = self.command.as_str() {
+            let debug_pos = cargo_args.iter().position(|s| s == "--debug");
+            let release_pos = cargo_args.iter().position(|s| s == "--release");
+
+            match (debug_pos, release_pos) {
+                (None, None) => {
+                    cargo_args.push(OsString::from("--release"));
+                }
+                (Some(debug_pos), None) => {
+                    cargo_args.remove(debug_pos);
+                }
+                (Some(_), Some(_)) => {
+                    bail!("Invalid arguments: cannot specify both --release and --debug");
+                }
+                (None, Some(_)) => {
+                    // DO NOTHING
+                }
+            }
+        }
+
+        let new_args = match (!cargo_args.is_empty(), !commands_args.is_empty()) {
+            (false, false) => Vec::new(),
+            (true, false) => cargo_args,
+            (_, true) => {
+                let mut result = Vec::new();
+                result.extend(cargo_args);
+                result.push(OsString::from("--"));
+                result.extend(commands_args.iter().cloned());
+                result
+            }
+        };
+
+        self.args = new_args;
+        Ok(self)
+    }
+
+    /// split the arguments into (cargo, command args)
+    fn split_args(&self) -> (&[OsString], &[OsString]) {
+        if self.command != "run" {
+            (self.args.as_slice(), &[])
+        } else {
+            let splitter = self.args.iter().position(|s| s == "--");
+            if let Some(splitter) = splitter {
+                (&self.args[..splitter], &self.args[(splitter + 1)..])
+            } else {
+                (&[], self.args.as_slice())
+            }
         }
     }
 
@@ -302,8 +388,14 @@ fn find_cargo_home_dir() -> Result<PathBuf> {
         return Ok(cargo_home);
     }
 
+    let env_var = if std::env::consts::OS == "windows" {
+        "HOME"
+    } else {
+        "USERPROFILE"
+    };
+
     // TODO: handle windows
-    if let Some(user_home) = std::env::var_os("HOME") {
+    if let Some(user_home) = std::env::var_os(env_var) {
         let mut user_home = PathBuf::from(user_home);
         user_home.push(".cargo");
         return Ok(user_home);
@@ -520,7 +612,7 @@ fn parse_manifest(reader: impl Read) -> Result<String> {
 mod test_parse_args {
     use super::{Args, CargoCall};
     use anyhow::Result;
-    use std::{ffi::OsString, path::PathBuf};
+    use std::ffi::OsString;
 
     fn parse_args(args: &[&str]) -> Result<Args> {
         let mut os_args = Vec::<OsString>::new();
@@ -532,27 +624,39 @@ mod test_parse_args {
     }
 
     #[test]
-    fn example() -> Result<()> {
-        let actual = parse_args(&["example.rs"])?;
-        let expected =
-            CargoCall::new(String::from("run"), PathBuf::from("example.rs"), Vec::new()).to_args();
-
-        assert_eq!(actual, expected);
-        Ok(())
+    fn example_implicit_run() {
+        assert_eq!(
+            parse_args(&["wop", "example.rs"]).unwrap(),
+            CargoCall::new("run", "example.rs")
+                .with_args(&["--release"])
+                .to_args()
+        );
     }
 
     #[test]
-    fn example2() -> Result<()> {
-        let actual = parse_args(&["build", "example.rs"])?;
-        let expected = CargoCall::new(
-            String::from("build"),
-            PathBuf::from("example.rs"),
-            Vec::new(),
-        )
-        .to_args();
+    fn example_implicit_run_debug() {
+        assert_eq!(
+            parse_args(&["wop", "example.rs", "--debug", "--"]).unwrap(),
+            CargoCall::new("run", "example.rs").to_args()
+        );
+    }
+
+    #[test]
+    fn example_run_debug() {
+        assert_eq!(
+            parse_args(&["wop", "run", "example.rs", "--debug", "--"]).unwrap(),
+            CargoCall::new("run", "example.rs").to_args()
+        );
+    }
+
+    #[test]
+    fn example2() {
+        let actual = parse_args(&["wop", "build", "example.rs"]).unwrap();
+        let expected = CargoCall::new("build", "example.rs")
+            .with_args(&["--release"])
+            .to_args();
 
         assert_eq!(actual, expected);
-        Ok(())
     }
 }
 
@@ -561,41 +665,27 @@ mod test_parse_manifest {
     use super::parse_manifest;
     use anyhow::Result;
 
+    const EXAMPLE: &str = r#"//! cargo-wop
+//!
+//! ```cargo
+//! [dependencies]
+//! anyhow = "1.0"
+//! sha1 = "0.6.0"
+//! ```
+//!
+
+use std::fs;"
+"#;
+
+    const EXAMPLE_MANIFEST: &str = r#"[dependencies]
+anyhow = "1.0"
+sha1 = "0.6.0"
+"#;
+
     #[test]
     fn example() -> Result<()> {
-        let source = concat!(
-            r#"//! cargo-wop"#,
-            "\n",
-            r#"//!"#,
-            "\n",
-            r#"//! ```cargo"#,
-            "\n",
-            r#"//! [dependencies]"#,
-            "\n",
-            r#"//! anyhow = "1.0""#,
-            "\n",
-            r#"//! sha1 = "0.6.0""#,
-            "\n",
-            r#"//! ```"#,
-            "\n",
-            r#"//!"#,
-            "\n",
-            r#""#,
-            "\n",
-            r#"use std::fs;"#,
-            "\n",
-        );
-        let actual = parse_manifest(source.as_bytes())?;
-
-        let expected = concat!(
-            r#"[dependencies]"#,
-            "\n",
-            r#"anyhow = "1.0""#,
-            "\n",
-            r#"sha1 = "0.6.0""#,
-            "\n",
-        );
-        let expected = String::from(expected);
+        let actual = parse_manifest(EXAMPLE.as_bytes())?;
+        let expected = String::from(EXAMPLE_MANIFEST);
 
         assert_eq!(actual, expected);
         Ok(())
