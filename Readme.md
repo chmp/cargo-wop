@@ -45,8 +45,8 @@ Some commands use additional rules:
   run my-script.rs --debug -- ...`
 - `build`: is executed twice. Once to build the package and a second time to
   determine the generated build artifacts and copy them into the local folder
-- `build` and `run` default to release builds. To disable this behavior pass the
-  `--debug` argument
+- `build` and `run` default to release builds. To disable this behavior, use the
+  `build-debug` and `run-debug` commands.
 - `install`: no manifest path is added, but the `--path` argument to the
   manifest directory
 

@@ -121,8 +121,9 @@ fn has_extension(s: &OsStr) -> bool {
 
 fn is_cargo_command(command: &str) -> bool {
     match command {
-        "bench" | "build" | "check" | "clean" | "clippy" | "install" | "locate-project"
-        | "metadata" | "pkgid" | "run" | "tree" | "test" | "verify-project" => true,
+        "bench" | "build" | "build-debug" | "check" | "clean" | "clippy" | "install"
+        | "locate-project" | "metadata" | "pkgid" | "run" | "run-debug" | "tree" | "test"
+        | "verify-project" => true,
         _ => false,
     }
 }
@@ -330,25 +331,9 @@ impl CargoCall {
 
         let mut cargo_args = cargo_args.to_owned();
         if let "build" | "run" = self.command.as_str() {
-            let debug_pos = cargo_args.iter().position(|s| s == "--debug");
-            let release_pos = cargo_args.iter().position(|s| s == "--release");
-
-            match (debug_pos, release_pos) {
-                (None, None) => {
-                    cargo_args.push(OsString::from("--release"));
-                }
-                (Some(debug_pos), None) => {
-                    cargo_args.remove(debug_pos);
-                }
-                (Some(_), Some(_)) => {
-                    bail!("Invalid arguments: cannot specify both --release and --debug");
-                }
-                (None, Some(_)) => {
-                    // DO NOTHING
-                }
-            }
+            cargo_args.push(OsString::from("--release"));
         }
-
+        
         let new_args = match (!cargo_args.is_empty(), !commands_args.is_empty()) {
             (false, false) => Vec::new(),
             (true, false) => cargo_args,
@@ -362,6 +347,13 @@ impl CargoCall {
         };
 
         self.args = new_args;
+
+        self.command = match self.command.as_str() {
+            "build-debug" => String::from("build"),
+            "run-debug" => String::from("run"),
+            _ => self.command,
+        };
+
         Ok(self)
     }
 
