@@ -43,9 +43,8 @@ Some commands use additional rules:
 - `run`: all arguments are passed per default to the script, not to cargo. To
   pass arguments to `cargo` place them before a `--`. For example: `cargo wop
   run my-script.rs --debug -- ...`
-- `build`: build is executed twice. Once to build the package and a second time
-  to determine the generated build artifacts and copy them into the local
-  folder
+- `build`: is executed twice. Once to build the package and a second time to
+  determine the generated build artifacts and copy them into the local folder
 - `build` and `run` default to release builds. To disable this behavior pass the
   `--debug` argument
 - `install`: no manifest path is added, but the `--path` argument to the
@@ -75,12 +74,8 @@ manifest use:
 ```bash
 cargo wop manifest my-script.rs
 ```
-
-# How-To's
-## Building static C libraries
-
-To build a static C library, simply specify a `[lib]` target with the correct
-flags set:
+For example, simply specify a `[lib]` target with the correct flags set to build
+a static C library:
 
 ```rust
 //! My script
