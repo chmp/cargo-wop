@@ -22,19 +22,28 @@ use sha1::Sha1;
 use toml::{self, Value};
 
 fn main() -> Result<()> {
+    std::process::exit(main_impl()?);
+}
+
+fn main_impl() -> Result<i32> {
     let args = parse_args(std::env::args_os().skip(1).collect())?;
 
     match args {
         Args::GenericCargoCall(call) => {
             let project_info = prepare_cargo_call(&call)?;
-            execute_cargo_call(&call, &project_info)?;
+            let exit_code = execute_cargo_call(&call, &project_info)?;
+            Ok(exit_code)
         }
         Args::BuildCargoCall(call) => {
             let project_info = prepare_cargo_call(&call)?;
-            execute_cargo_call(&call, &project_info)?;
+            let result = execute_cargo_call(&call, &project_info)?;
+            ensure!(
+                result == 0,
+                "Error during build. Cannot copy build artifacts"
+            );
             let artifacts = collect_build_artifacts(&call, &project_info)?;
-
             copy_build_artifacts(artifacts, std::env::current_dir()?)?;
+            Ok(0)
         }
         Args::InstallCargoCall(call) => {
             // TODO: clean this up
@@ -52,12 +61,7 @@ fn main() -> Result<()> {
                 .args(call.args.iter());
 
             let exit_code = command.status()?.code().unwrap_or_default();
-
-            ensure!(
-                exit_code == 0,
-                "Error during running cargo. Exit code {}",
-                exit_code
-            );
+            Ok(exit_code)
         }
         Args::Manifest(target) => {
             // TODO: remove the duplication of file + parse + normalize?
@@ -65,10 +69,9 @@ fn main() -> Result<()> {
             let manifest = parse_manifest(file)?;
             let manifest = normalize_manifest(manifest, target.as_path())?;
             print!("{}", toml::to_string(&manifest)?);
+            Ok(0)
         }
     }
-
-    Ok(())
 }
 
 /// Parse the command line arguments
@@ -168,19 +171,12 @@ fn prepare_cargo_call(call: &CargoCall) -> Result<ProjectInfo> {
 
 /// Execute a cargo call
 ///
-fn execute_cargo_call(call: &CargoCall, project_info: &ProjectInfo) -> Result<()> {
+fn execute_cargo_call(call: &CargoCall, project_info: &ProjectInfo) -> Result<i32> {
     let exit_code = build_cargo_command::<&str>(&call, &project_info, &[])
         .status()?
         .code()
         .unwrap_or_default();
-
-    ensure!(
-        exit_code == 0,
-        "Error during running cargo. Exit code {}",
-        exit_code
-    );
-
-    Ok(())
+    Ok(exit_code)
 }
 
 /// Execute a cargo call and collect any generated artifacts
