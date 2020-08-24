@@ -26,9 +26,9 @@ cargo wop test my-script.rs
 ## How arguments are interpreted
 
 At the moment the following cargo commands are supported: `bench`, `build`,
-`check`, `clean`, `locate-project`, `metadata`, `pkgid`, `run`, `tree`, `test`,
-`verify-project`. For most commands `cargo-wop` rewrites the command-line as
-follows:
+`check`, `clean`, `install`, `locate-project`, `metadata`, `pkgid`, `run`,
+`tree`, `test`, `verify-project`. For most commands `cargo-wop` rewrites the
+command-line as follows:
 
 ```bash
 # Original command-line
@@ -48,6 +48,8 @@ Some commands use additional rules:
   folder
 - `build` and `run` default to release builds. To disable this behavior pass the
   `--debug` argument
+- `install`: no manifest path is added, but the `--path` argument to the
+  manifest directory
 
 ## Specifying dependencies
 

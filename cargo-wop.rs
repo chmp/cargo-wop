@@ -36,6 +36,29 @@ fn main() -> Result<()> {
 
             copy_build_artifacts(artifacts, std::env::current_dir()?)?;
         }
+        Args::IntstallCargoCall(call) => {
+            // TODO: clean this up
+            let project_info = prepare_cargo_call(&call)?;
+            let manifest_dir = project_info
+                .manifest_path
+                .parent()
+                .ok_or_else(|| anyhow!("Manifest path without parent"))?;
+
+            let mut command = Command::new("cargo");
+            command
+                .arg(call.command.as_str())
+                .arg("--path")
+                .arg(manifest_dir.as_os_str())
+                .args(call.args.iter());
+
+            let exit_code = command.status()?.code().unwrap_or_default();
+
+            ensure!(
+                exit_code == 0,
+                "Error during running cargo. Exit code {}",
+                exit_code
+            );
+        }
         Args::Manifest(target) => {
             // TODO: remove the duplication of file + parse + normalize?
             let file = File::open(target.as_path())?;
@@ -94,8 +117,8 @@ fn has_extension(s: &OsStr) -> bool {
 
 fn is_cargo_command(command: &str) -> bool {
     match command {
-        "bench" | "build" | "check" | "clean" | "locate-project" | "metadata" | "pkgid" | "run"
-        | "tree" | "test" | "verify-project" => true,
+        "bench" | "build" | "check" | "clean" | "install" | "locate-project" | "metadata"
+        | "pkgid" | "run" | "tree" | "test" | "verify-project" => true,
         _ => false,
     }
 }
@@ -141,7 +164,7 @@ fn prepare_cargo_call(call: &CargoCall) -> Result<ProjectInfo> {
 /// Execute a cargo call
 ///
 fn execute_cargo_call(call: &CargoCall, project_info: &ProjectInfo) -> Result<()> {
-    let exit_code = build_cargo_command(&call, &project_info, &[])
+    let exit_code = build_cargo_command::<&str>(&call, &project_info, &[])
         .status()?
         .code()
         .unwrap_or_default();
@@ -219,10 +242,10 @@ fn parse_build_output(output: &[u8], project_info: &ProjectInfo) -> Result<Vec<S
 
 /// A helper to build a cargo call command
 ///
-fn build_cargo_command(
+fn build_cargo_command<S: AsRef<OsStr>>(
     call: &CargoCall,
     project_info: &ProjectInfo,
-    extra_args: &[&str],
+    extra_args: &[S],
 ) -> Command {
     let mut result = Command::new("cargo");
 
@@ -264,6 +287,7 @@ enum Args {
     /// Execute a direct cargo command
     GenericCargoCall(CargoCall),
     BuildCargoCall(CargoCall),
+    IntstallCargoCall(CargoCall),
     Manifest(PathBuf),
 }
 
@@ -352,10 +376,10 @@ impl CargoCall {
     }
 
     fn to_args(self) -> Args {
-        if self.command != "build" {
-            Args::GenericCargoCall(self)
-        } else {
-            Args::BuildCargoCall(self)
+        match self.command.as_str() {
+            "build" => Args::BuildCargoCall(self),
+            "install" => Args::IntstallCargoCall(self),
+            _ => Args::GenericCargoCall(self),
         }
     }
 }
