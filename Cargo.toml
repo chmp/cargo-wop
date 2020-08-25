@@ -1,6 +1,6 @@
 [package]
 name = "cargo-wop"
-version = "0.1.3"
+version = "0.1.4"
 authors = ["Christopher Prohm"]
 edition = "2018"
 
