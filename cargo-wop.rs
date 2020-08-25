@@ -27,7 +27,7 @@ fn main() -> Result<()> {
 
 fn main_impl() -> Result<i32> {
     let args = parse_args(std::env::args_os().skip(1))?;
-    let res = execute_args(args)?;
+    let res = execute_args(args, std::env::current_dir()?)?;
     Ok(res)
 }
 
@@ -102,15 +102,17 @@ fn is_cargo_command(command: &str) -> bool {
     }
 }
 
-fn execute_args(args: Args) -> Result<i32> {
+fn execute_args(args: Args, refpath: impl AsRef<Path>) -> Result<i32> {
+    let refpath = refpath.as_ref();
+
     match args {
         Args::GenericCargoCall(call) => {
-            let project_info = prepare_manifest_dir(&call.target)?;
+            let project_info = prepare_manifest_dir(&call.target, refpath)?;
             let exit_code = call.execute(&project_info)?;
             Ok(exit_code)
         }
         Args::BuildCargoCall(call) => {
-            let project_info = prepare_manifest_dir(&call.target)?;
+            let project_info = prepare_manifest_dir(&call.target, refpath)?;
             let result = call.execute(&project_info)?;
             ensure!(
                 result == 0,
@@ -121,7 +123,7 @@ fn execute_args(args: Args) -> Result<i32> {
             Ok(0)
         }
         Args::InstallCargoCall(call) => {
-            let project_info = prepare_manifest_dir(&call.target)?;
+            let project_info = prepare_manifest_dir(&call.target, refpath)?;
             let mut command = Command::new("cargo");
             command
                 .arg(call.command.as_str())
@@ -136,12 +138,12 @@ fn execute_args(args: Args) -> Result<i32> {
             // TODO: remove the duplication of file + parse + normalize?
             let file = File::open(target.as_path())?;
             let manifest = parse_manifest(file)?;
-            let manifest = normalize_manifest(manifest, target.as_path())?;
+            let manifest = normalize_manifest(manifest, target.as_path(), refpath)?;
             print!("{}", toml::to_string(&manifest)?);
             Ok(0)
         }
         Args::Exec(exec) => {
-            let project_info = prepare_manifest_dir(exec.target.as_path())?;
+            let project_info = prepare_manifest_dir(exec.target.as_path(), refpath)?;
             let mut command = Command::new(&exec.command);
             command
                 .args(exec.args.iter().cloned())
@@ -158,8 +160,8 @@ fn execute_args(args: Args) -> Result<i32> {
 /// This commands writes the manifest and copies the source file. After this
 /// step, cargo calls can be made against this directory.
 ///
-fn prepare_manifest_dir(target: impl AsRef<Path>) -> Result<ProjectInfo> {
-    let target = target.as_ref().canonicalize()?;
+fn prepare_manifest_dir(target: impl AsRef<Path>, refpath: impl AsRef<Path>) -> Result<ProjectInfo> {
+    let target = refpath.as_ref().join(target);
     let manifest_dir = find_project_dir(target.as_path())?;
     let manifest_path = manifest_dir.join("Cargo.toml");
 
@@ -176,7 +178,7 @@ fn prepare_manifest_dir(target: impl AsRef<Path>) -> Result<ProjectInfo> {
     )?;
 
     let manifest = parse_manifest_file(target.as_path())?;
-    let manifest = normalize_manifest(manifest, target.as_path())?;
+    let manifest = normalize_manifest(manifest, target.as_path(), refpath)?;
 
     // perform any faillible operations
     fs::create_dir_all(&manifest_dir)?;
@@ -476,10 +478,9 @@ fn hash_path(path: impl AsRef<Path>) -> String {
 /// makes sure at least a single target exists (a binary as a default). For each
 /// target it sets the correct path to the source file.
 ///
-fn normalize_manifest(mut manifest: Value, target_path: impl AsRef<Path>) -> Result<Value> {
-    let project_dir = target_path
-        .as_ref()
-        .canonicalize()?
+fn normalize_manifest(mut manifest: Value, target_path: impl AsRef<Path>, refpath: impl AsRef<Path>) -> Result<Value> {
+    let target_path = target_path.as_ref();
+    let project_dir = refpath.as_ref().join(target_path)
         .parent()
         .ok_or_else(|| anyhow!("Invalid file path"))?
         .to_owned();
@@ -493,7 +494,7 @@ fn normalize_manifest(mut manifest: Value, target_path: impl AsRef<Path>) -> Res
     ensure_at_least_a_single_target(root)?;
 
     patch_all_targets(root, &target_path, &target_name)?;
-    patch_all_dependencies(root, &project_dir)?;
+    patch_all_dependencies(root, &project_dir, refpath)?;
 
     Ok(manifest)
 }
@@ -614,7 +615,9 @@ fn patch_target(target: &mut Value, path: &str, name: &str) -> Result<()> {
 fn patch_all_dependencies(
     root: &mut toml::map::Map<String, Value>,
     project_dir: &Path,
+    refpath: impl AsRef<Path>
 ) -> Result<()> {
+    let refpath = refpath.as_ref();
     for dep_root_key in &["dependencies", "dev-dependencies", "build-dependencies"] {
         if let Some(dep_root) = root.get_mut(*dep_root_key) {
             let dep_root = dep_root
@@ -637,7 +640,7 @@ fn patch_all_dependencies(
                     .unwrap()
                     .as_str()
                     .ok_or_else(|| anyhow!("Invalid manifest: non string path"))?;
-                let path = project_dir.join(path).canonicalize()?;
+                let path = refpath.join(project_dir).join(path);
                 let path = path
                     .to_str()
                     .ok_or_else(|| anyhow!("Cannot interpret dependency path a string"))?;
