@@ -68,7 +68,7 @@ fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Args> {
             let exec = Exec {
                 target: target,
                 command: rest_args[0].clone(),
-                args: args[1..].to_vec(),
+                args: rest_args[1..].to_vec(),
             };
             Args::Exec(exec)
         }
@@ -147,7 +147,7 @@ fn execute_args(args: Args, refpath: impl AsRef<Path>) -> Result<i32> {
             let mut command = Command::new(&exec.command);
             command
                 .args(exec.args.iter().cloned())
-                .current_dir(&project_info.manifest_dir);
+                .current_dir(&project_info.manifest_dir.canonicalize()?);
 
             let exit_code = command.status()?.code().unwrap_or_default();
             Ok(exit_code)
@@ -641,6 +641,7 @@ fn patch_all_dependencies(
                     .as_str()
                     .ok_or_else(|| anyhow!("Invalid manifest: non string path"))?;
                 let path = refpath.join(project_dir).join(path);
+                let path = path.canonicalize()?;
                 let path = path
                     .to_str()
                     .ok_or_else(|| anyhow!("Cannot interpret dependency path a string"))?;
