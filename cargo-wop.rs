@@ -11,7 +11,7 @@
 use std::{
     ffi::{OsStr, OsString},
     fs::{self, File},
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -26,17 +26,92 @@ fn main() -> Result<()> {
 }
 
 fn main_impl() -> Result<i32> {
-    let args = parse_args(std::env::args_os().skip(1).collect())?;
+    let args = parse_args(std::env::args_os().skip(1))?;
+    let res = execute_args(args)?;
+    Ok(res)
+}
 
+/// Parse the command line arguments
+///
+fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Args> {
+    let args = args.collect::<Vec<_>>();
+    ensure!(
+        args.len() >= 2,
+        "Need at least two  arguments: <wop [source-file]> or <wop [command] [source-file]>"
+    );
+    ensure!(args[0] == "wop", "First argument must be wop");
+
+    let (command, target, rest_args) = if has_extension(args[1].as_os_str()) {
+        (String::from("run"), PathBuf::from(&args[1]), &args[2..])
+    } else {
+        ensure!(
+            args.len() >= 3,
+            "Need at least three arguments: <wop [command] [source-file]>"
+        );
+        (
+            to_utf8_string(&args[1])?,
+            PathBuf::from(&args[2]),
+            &args[3..],
+        )
+    };
+
+    let result = match command.as_str() {
+        "manifest" => {
+            ensure!(
+                rest_args.is_empty(),
+                "The manifest command does not take additional arguments"
+            );
+            Args::Manifest(target)
+        }
+        "exec" => {
+            ensure!(!rest_args.is_empty(), "Need at least an argument");
+            let exec = Exec {
+                target: target,
+                command: rest_args[0].clone(),
+                args: args[1..].to_vec(),
+            };
+            Args::Exec(exec)
+        }
+        _ if is_cargo_command(&command) => CargoCall::new(command, target)
+            .with_args(rest_args)
+            .normalize()?
+            .into_args(),
+        _ => bail!("Unknown command: {}", command),
+    };
+    Ok(result)
+}
+
+fn to_utf8_string(s: &OsStr) -> Result<String> {
+    let result = s
+        .to_str()
+        .ok_or_else(|| anyhow!("Could not get utf8 rep"))?
+        .to_owned();
+    Ok(result)
+}
+
+fn has_extension(s: &OsStr) -> bool {
+    AsRef::<Path>::as_ref(s).extension().is_some()
+}
+
+fn is_cargo_command(command: &str) -> bool {
+    match command {
+        "bench" | "build" | "build-debug" | "check" | "clean" | "clippy" | "install"
+        | "locate-project" | "metadata" | "pkgid" | "run" | "run-debug" | "tree" | "test"
+        | "verify-project" => true,
+        _ => false,
+    }
+}
+
+fn execute_args(args: Args) -> Result<i32> {
     match args {
         Args::GenericCargoCall(call) => {
-            let project_info = prepare_cargo_call(&call.target)?;
-            let exit_code = execute_cargo_call(&call, &project_info)?;
+            let project_info = prepare_manifest_dir(&call.target)?;
+            let exit_code = call.execute(&project_info)?;
             Ok(exit_code)
         }
         Args::BuildCargoCall(call) => {
-            let project_info = prepare_cargo_call(&call.target)?;
-            let result = execute_cargo_call(&call, &project_info)?;
+            let project_info = prepare_manifest_dir(&call.target)?;
+            let result = call.execute(&project_info)?;
             ensure!(
                 result == 0,
                 "Error during build. Cannot copy build artifacts"
@@ -46,9 +121,7 @@ fn main_impl() -> Result<i32> {
             Ok(0)
         }
         Args::InstallCargoCall(call) => {
-            // TODO: clean this up
-            let project_info = prepare_cargo_call(&call.target)?;
-
+            let project_info = prepare_manifest_dir(&call.target)?;
             let mut command = Command::new("cargo");
             command
                 .arg(call.command.as_str())
@@ -68,7 +141,7 @@ fn main_impl() -> Result<i32> {
             Ok(0)
         }
         Args::Exec(exec) => {
-            let project_info = prepare_cargo_call(exec.target.as_path())?;
+            let project_info = prepare_manifest_dir(exec.target.as_path())?;
             let mut command = Command::new(&exec.command);
             command
                 .args(exec.args.iter().cloned())
@@ -80,104 +153,35 @@ fn main_impl() -> Result<i32> {
     }
 }
 
-/// Parse the command line arguments
-///
-fn parse_args(args: Vec<OsString>) -> Result<Args> {
-    ensure!(
-        args.len() >= 2,
-        "Need at least two  arguments: <wop [source-file]> or <wop [command] [source-file]>"
-    );
-    ensure!(args[0] == "wop", "First argument must be wop");
-
-    let (command, target, consumed_args) = if has_extension(args[1].as_os_str()) {
-        (String::from("run"), PathBuf::from(&args[1]), 2)
-    } else {
-        ensure!(
-            args.len() >= 3,
-            "Need at least three arguments: <wop [command] [source-file]>"
-        );
-
-        (
-            args[1]
-                .to_str()
-                .ok_or_else(|| anyhow!("Cannot interpret first argument as string"))?
-                .to_owned(),
-            PathBuf::from(&args[2]),
-            3,
-        )
-    };
-
-    if command == "manifest" {
-        ensure!(
-            args.len() == consumed_args,
-            "The manifest command does not take additional arguments"
-        );
-        return Ok(Args::Manifest(target));
-    }
-    if command == "exec" {
-        ensure!(args.len() > consumed_args, "Need at least an argument");
-        let exec = Exec {
-            target: target,
-            command: args[consumed_args].clone(),
-            args: args[(consumed_args + 1)..].to_vec(),
-        };
-        return Ok(Args::Exec(exec));
-    }
-
-    if !is_cargo_command(&command) {
-        bail!("Unknown command: {}", command);
-    }
-    Ok(CargoCall::new(command, target)
-        .with_args(args.iter().skip(consumed_args))
-        .normalize()?
-        .into_args())
-}
-
-fn has_extension(s: &OsStr) -> bool {
-    AsRef::<Path>::as_ref(s).extension().is_some()
-}
-
-fn is_cargo_command(command: &str) -> bool {
-    match command {
-        "bench" | "build" | "build-debug" | "check" | "clean" | "clippy" | "install"
-        | "locate-project" | "metadata" | "pkgid" | "run" | "run-debug" | "tree" | "test"
-        | "verify-project" => true,
-        _ => false,
-    }
-}
-
 /// Prepare the cargo project directory
 ///
 /// This commands writes the manifest and copies the source file. After this
 /// step, cargo calls can be made against this directory.
 ///
-fn prepare_cargo_call(target: impl AsRef<Path>) -> Result<ProjectInfo> {
+fn prepare_manifest_dir(target: impl AsRef<Path>) -> Result<ProjectInfo> {
     let target = target.as_ref().canonicalize()?;
-    let file = File::open(target.as_path())?;
-
     let manifest_dir = find_project_dir(target.as_path())?;
-
-    let manifest = parse_manifest(file)?;
-    let manifest = normalize_manifest(manifest, target.as_path())?;
-    let manifest = toml::to_string(&manifest)?;
-
-    fs::create_dir_all(&manifest_dir)?;
-
     let manifest_path = manifest_dir.join("Cargo.toml");
 
-    let mut file = File::create(manifest_path.clone())?;
-    file.write_all(manifest.as_bytes())?;
-
-    let file = manifest_dir.join(target.file_name().unwrap());
-    fs::copy(target.as_path(), file)?;
+    let source_path = target
+        .file_name()
+        .ok_or_else(|| anyhow!("Cannot handle directory source"))?;
+    let source_path = manifest_dir.join(source_path);
 
     // TODO: get the name from the normalized manifest in case the user has overwritten it
-    let name = target
-        .file_stem()
-        .ok_or_else(|| anyhow!("Could not get name"))?
-        .to_str()
-        .ok_or_else(|| anyhow!("Could not get utf8 rep"))?
-        .to_owned();
+    let name = to_utf8_string(
+        target
+            .file_stem()
+            .ok_or_else(|| anyhow!("Could not get name"))?,
+    )?;
+
+    let manifest = parse_manifest_file(target.as_path())?;
+    let manifest = normalize_manifest(manifest, target.as_path())?;
+
+    // perform any faillible operations
+    fs::create_dir_all(&manifest_dir)?;
+    fs::write(&manifest_path, toml::to_string(&manifest)?)?;
+    fs::copy(target.as_path(), source_path.as_path())?;
 
     Ok(ProjectInfo {
         manifest_path,
@@ -186,20 +190,11 @@ fn prepare_cargo_call(target: impl AsRef<Path>) -> Result<ProjectInfo> {
     })
 }
 
-/// Execute a cargo call
-///
-fn execute_cargo_call(call: &CargoCall, project_info: &ProjectInfo) -> Result<i32> {
-    let exit_code = build_cargo_command::<&str>(&call, &project_info, &[])
-        .status()?
-        .code()
-        .unwrap_or_default();
-    Ok(exit_code)
-}
-
 /// Execute a cargo call and collect any generated artifacts
 ///
 fn collect_build_artifacts(call: &CargoCall, project_info: &ProjectInfo) -> Result<Vec<String>> {
-    let output = build_cargo_command(&call, &project_info, &["--message-format", "json"])
+    let output = call
+        .build_with_args(&project_info, &["--message-format", "json"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()?;
@@ -258,25 +253,6 @@ fn parse_build_output(output: &[u8], project_info: &ProjectInfo) -> Result<Vec<S
     Ok(result)
 }
 
-/// A helper to build a cargo call command
-///
-fn build_cargo_command<S: AsRef<OsStr>>(
-    call: &CargoCall,
-    project_info: &ProjectInfo,
-    extra_args: &[S],
-) -> Command {
-    let mut result = Command::new("cargo");
-
-    result
-        .arg(call.command.as_str())
-        .arg("--manifest-path")
-        .arg(project_info.manifest_path.as_os_str())
-        .args(extra_args)
-        .args(call.args.iter());
-
-    result
-}
-
 fn copy_build_artifacts<I, P, T>(from: I, to: T) -> Result<()>
 where
     I: IntoIterator<Item = P>,
@@ -305,9 +281,16 @@ struct ProjectInfo {
 enum Args {
     /// Execute a direct cargo command
     GenericCargoCall(CargoCall),
+    /// A build step
+    ///
+    /// It can safely be executed a second time with `--message-format json` to
+    /// get the build artifacts
     BuildCargoCall(CargoCall),
+    /// A install step that gets passed the manifest dir not the file
     InstallCargoCall(CargoCall),
+    /// Print out the manifest
     Manifest(PathBuf),
+    /// Execute a command inside the manifest dir
     Exec(Exec),
 }
 
@@ -316,6 +299,35 @@ struct CargoCall {
     command: String,
     target: PathBuf,
     args: Vec<OsString>,
+}
+
+impl CargoCall {
+    /// Execute a cargo call
+    ///
+    fn execute(&self, project_info: &ProjectInfo) -> Result<i32> {
+        let exit_code = self
+            .build_with_args::<&str>(&project_info, &[])
+            .status()?
+            .code()
+            .unwrap_or_default();
+        Ok(exit_code)
+    }
+
+    fn build_with_args<S: AsRef<OsStr>>(
+        &self,
+        project_info: &ProjectInfo,
+        extra_args: &[S],
+    ) -> Command {
+        let mut result = Command::new("cargo");
+        result
+            .arg(self.command.as_str())
+            .arg("--manifest-path")
+            .arg(project_info.manifest_path.as_os_str())
+            .args(extra_args)
+            .args(self.args.iter());
+
+        result
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -491,12 +503,10 @@ fn normalize_manifest(mut manifest: Value, target_path: impl AsRef<Path>) -> Res
 fn get_path_info(path: impl AsRef<Path>) -> Result<(String, String)> {
     let path = path.as_ref();
 
-    let target_name = path
-        .file_stem()
-        .ok_or_else(|| anyhow!("Cannot build manifest for non file target"))?
-        .to_str()
-        .ok_or_else(|| anyhow!("Cannot build manifest for paths not-expressible in utf-8"))?
-        .to_owned();
+    let target_name = to_utf8_string(
+        path.file_stem()
+            .ok_or_else(|| anyhow!("Cannot build manifest for non file target"))?,
+    )?;
     let target_path = path
         .file_name()
         .ok_or_else(|| anyhow!("Cannot build manifest for non file target"))?
@@ -639,6 +649,11 @@ fn patch_all_dependencies(
     Ok(())
 }
 
+fn parse_manifest_file(path: impl AsRef<Path>) -> Result<Value> {
+    let file = File::open(path)?;
+    parse_manifest(file)
+}
+
 /// Parse the manifest from the initial doc comment
 ///
 fn parse_manifest(reader: impl Read) -> Result<Value> {
@@ -723,7 +738,7 @@ mod test_parse_args {
             os_args.push(OsString::from(*arg));
         }
 
-        super::parse_args(os_args)
+        super::parse_args(os_args.into_iter())
     }
 
     #[test]
