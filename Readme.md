@@ -2,25 +2,30 @@
 
 **WARNING:** this package is experimental at the moment.
 
-The ambition is to allow running all cargo commands against a rust source with
-additional dependency annotations. 
+Rust source files as self-contained projects. `cargo-wop` allows to `cargo` work
+with rust source file as if thy were full projects.   This project is heavily
+inspired by [cargo-script][cargo-script], [cargo-eval][cargo-eval]. In contrast
+to these projects, `cargo-wop` is designed to be as close as possible to cargo
+and support all sensible arguments. 
 
-This project is heavily inspired by [cargo-script][cargo-script],
-[cargo-eval][cargo-eval]. In contrast to these projects, `cargo-wop` aims to be
-as close as possible to cargo and support all sensible arguments. 
-
-Usage: 
+Run a file as a script: 
 
 ```bash
-# these two are the same
 cargo wop my-script.rs
+
+# equivalent call:
 cargo wop run my-script.rs
+```
 
-# build  artifacts declared by the script 
-# and copy them into the working directory
+Build artifacts defined in the script: 
+
+```
 cargo wop build my-script.rs
+```
 
-# Run the tests
+Run tests define in the script:
+
+```
 cargo wop test my-script.rs
 ```
 ## How arguments are interpreted
