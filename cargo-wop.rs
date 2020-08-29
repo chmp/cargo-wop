@@ -14,21 +14,11 @@
 //! name = "cargo-wop"
 //! ```
 //!
-use std::{
-    ffi::OsStr,
-    fs::{self, File},
-    io::{BufRead, BufReader, Read},
-    path::{Path, PathBuf},
-    process::{Command, Stdio},
-};
+use anyhow::Result;
 
-use anyhow::{anyhow, bail, ensure, Context, Result};
-use serde_json::{self, Value as JsonValue};
-use sha1::Sha1;
-use toml::{self, Value};
-
-use argparse::{parse_args, Args, CargoCall};
-use execution_env::{ExecutionEnv, StdExecutionEnv};
+use argparse::parse_args;
+use execution::execute_args;
+use execution_env::StdExecutionEnv;
 
 fn main() -> Result<()> {
     std::process::exit(main_impl()?);
@@ -218,247 +208,274 @@ mod argparse {
     }
 }
 
-fn to_utf8_string(s: &OsStr) -> Result<String> {
-    let result = s
-        .to_str()
-        .ok_or_else(|| anyhow!("Could not get utf8 rep"))?
-        .to_owned();
-    Ok(result)
-}
+mod execution {
+    use std::{
+        ffi::OsStr,
+        fs::{self, File},
+        io::{BufRead, BufReader},
+        path::{Path, PathBuf},
+        process::{Command, Stdio},
+    };
 
-fn execute_args(args: Args, env: &impl ExecutionEnv) -> Result<i32> {
-    match args {
-        Args::GenericCargoCall(call) => {
-            let project_info = prepare_manifest_dir(&call.target, env)?;
-            let exit_code = execute_cargo_call(&call, &project_info)?;
-            Ok(exit_code)
-        }
-        Args::BuildCargoCall(call) => {
-            let project_info = prepare_manifest_dir(&call.target, env)?;
-            let result = execute_cargo_call(&call, &project_info)?;
-            ensure!(
-                result == 0,
-                "Error during build. Cannot copy build artifacts"
-            );
-            let artifacts = collect_build_artifacts(&call, &project_info)?;
-            copy_build_artifacts(artifacts, std::env::current_dir()?)?;
-            Ok(0)
-        }
-        Args::InstallCargoCall(call) => {
-            let project_info = prepare_manifest_dir(&call.target, env)?;
-            let mut command = Command::new("cargo");
-            command
-                .arg(call.command.as_str())
-                .arg("--path")
-                .arg(&project_info.manifest_dir)
-                .args(call.args.iter());
+    use anyhow::{anyhow, ensure, Context, Result};
+    use serde_json::Value as JsonValue;
+    use sha1::Sha1;
+    use toml::Value;
 
-            let exit_code = command.status()?.code().unwrap_or_default();
-            Ok(exit_code)
-        }
-        Args::Manifest(target) => {
-            // TODO: remove the duplication of file + parse + normalize?
-            let file = File::open(target.as_path()).context("Error while opening manifest path")?;
-            let manifest = parse_manifest(file).context("Error while parsing manifest path")?;
-            let manifest = normalize_manifest(manifest, target.as_path(), env)
-                .context("Error during normalizing manifest")?;
-            print!("{}", toml::to_string(&manifest)?);
-            Ok(0)
-        }
-        Args::Exec(exec) => {
-            let project_info = prepare_manifest_dir(exec.target.as_path(), env)?;
-            let mut command = Command::new(&exec.command);
-            command
-                .args(exec.args.iter().cloned())
-                .current_dir(&project_info.manifest_dir.canonicalize()?);
+    use super::{
+        argparse::{Args, CargoCall},
+        execution_env::ExecutionEnv,
+        manifest_normalization::normalize_manifest,
+        manifest_parsing::parse_manifest,
+        util::to_utf8_string,
+    };
 
-            let exit_code = command.status()?.code().unwrap_or_default();
-            Ok(exit_code)
-        }
-    }
-}
+    pub fn execute_args(args: Args, env: &impl ExecutionEnv) -> Result<i32> {
+        match args {
+            Args::GenericCargoCall(call) => {
+                let project_info = prepare_manifest_dir(&call.target, env)?;
+                let exit_code = execute_cargo_call(&call, &project_info)?;
+                Ok(exit_code)
+            }
+            Args::BuildCargoCall(call) => {
+                let project_info = prepare_manifest_dir(&call.target, env)?;
+                let result = execute_cargo_call(&call, &project_info)?;
+                ensure!(
+                    result == 0,
+                    "Error during build. Cannot copy build artifacts"
+                );
+                let artifacts = collect_build_artifacts(&call, &project_info)?;
+                copy_build_artifacts(artifacts, std::env::current_dir()?)?;
+                Ok(0)
+            }
+            Args::InstallCargoCall(call) => {
+                let project_info = prepare_manifest_dir(&call.target, env)?;
+                let mut command = Command::new("cargo");
+                command
+                    .arg(call.command.as_str())
+                    .arg("--path")
+                    .arg(&project_info.manifest_dir)
+                    .args(call.args.iter());
 
-/// Execute a cargo call
-///
-fn execute_cargo_call(call: &CargoCall, project_info: &ProjectInfo) -> Result<i32> {
-    let exit_code = build_cargo_call_with_args::<&str>(call, project_info, &[])
-        .status()?
-        .code()
-        .unwrap_or_default();
-    Ok(exit_code)
-}
+                let exit_code = command.status()?.code().unwrap_or_default();
+                Ok(exit_code)
+            }
+            Args::Manifest(target) => {
+                // TODO: remove the duplication of file + parse + normalize?
+                let file =
+                    File::open(target.as_path()).context("Error while opening manifest path")?;
+                let manifest = parse_manifest(file).context("Error while parsing manifest path")?;
+                let manifest = normalize_manifest(manifest, target.as_path(), env)
+                    .context("Error during normalizing manifest")?;
+                print!("{}", toml::to_string(&manifest)?);
+                Ok(0)
+            }
+            Args::Exec(exec) => {
+                let project_info = prepare_manifest_dir(exec.target.as_path(), env)?;
+                let mut command = Command::new(&exec.command);
+                command
+                    .args(exec.args.iter().cloned())
+                    .current_dir(&project_info.manifest_dir.canonicalize()?);
 
-fn build_cargo_call_with_args<S: AsRef<OsStr>>(
-    call: &CargoCall,
-    project_info: &ProjectInfo,
-    extra_args: &[S],
-) -> Command {
-    let mut result = Command::new("cargo");
-    result
-        .arg(call.command.as_str())
-        .arg("--manifest-path")
-        .arg(project_info.manifest_path.as_os_str())
-        .args(extra_args)
-        .args(call.args.iter());
-
-    result
-}
-
-/// Prepare the cargo project directory
-///
-/// This commands writes the manifest and copies the source file. After this
-/// step, cargo calls can be made against this directory.
-///
-fn prepare_manifest_dir(target: impl AsRef<Path>, env: &impl ExecutionEnv) -> Result<ProjectInfo> {
-    let target = target.as_ref();
-    let manifest_dir = find_project_dir(target, env)?;
-    let manifest_path = manifest_dir.join("Cargo.toml");
-
-    let source_path = target
-        .file_name()
-        .ok_or_else(|| anyhow!("Cannot handle directory source"))?;
-    let source_path = manifest_dir.join(source_path);
-
-    // TODO: get the name from the normalized manifest in case the user has overwritten it
-    let name = to_utf8_string(
-        target
-            .file_stem()
-            .ok_or_else(|| anyhow!("Could not get name"))?,
-    )?;
-
-    let manifest = parse_manifest_file(target)?;
-    let manifest = normalize_manifest(manifest, target, env)?;
-
-    // perform any faillible operations
-    fs::create_dir_all(&manifest_dir)?;
-    fs::write(&manifest_path, toml::to_string(&manifest)?)?;
-    fs::copy(target, source_path)?;
-
-    Ok(ProjectInfo {
-        manifest_path,
-        manifest_dir,
-        name,
-    })
-}
-
-/// Execute a cargo call and collect any generated artifacts
-///
-fn collect_build_artifacts(call: &CargoCall, project_info: &ProjectInfo) -> Result<Vec<String>> {
-    let output = build_cargo_call_with_args(call, project_info, &["--message-format", "json"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()?;
-
-    let exit_code = output.status.code().unwrap_or_default();
-    ensure!(
-        exit_code == 0,
-        "Error during running cargo. Exit code {}",
-        exit_code
-    );
-
-    let artifacts = parse_build_output(output.stdout.as_slice(), &project_info)?;
-    Ok(artifacts)
-}
-
-/// Parse the output of a cargo build step
-///
-fn parse_build_output(output: &[u8], project_info: &ProjectInfo) -> Result<Vec<String>> {
-    let mut result = Vec::new();
-    let reader = BufReader::new(output);
-    for line in reader.lines() {
-        let line = line?;
-        let value: JsonValue = serde_json::from_str(&line)?;
-
-        let reason = value
-            .get("reason")
-            .and_then(JsonValue::as_str)
-            .ok_or_else(|| anyhow!("Invalid cargo output reason not a string"))?;
-
-        if reason != "compiler-artifact" {
-            continue;
-        }
-
-        let package_id = value
-            .get("package_id")
-            .and_then(JsonValue::as_str)
-            .ok_or_else(|| anyhow!("Invalid compiler-artifact: package_id not a string"))?;
-
-        let needle = format!("{} ", project_info.name);
-        if !package_id.starts_with(&needle) {
-            continue;
-        }
-
-        let filenames = value
-            .get("filenames")
-            .and_then(JsonValue::as_array)
-            .ok_or_else(|| anyhow!("Invalid compiler-artifact: filenames not an array"))?;
-
-        for filename in filenames {
-            let filename = filename
-                .as_str()
-                .ok_or_else(|| anyhow!("Invalid file name not a string"))?;
-            result.push(filename.to_owned());
+                let exit_code = command.status()?.code().unwrap_or_default();
+                Ok(exit_code)
+            }
         }
     }
-    Ok(result)
-}
 
-fn copy_build_artifacts<I, P, T>(from: I, to: T) -> Result<()>
-where
-    I: IntoIterator<Item = P>,
-    P: AsRef<Path>,
-    T: AsRef<Path>,
-{
-    for src in from {
-        let src = src.as_ref();
-        let dst = to.as_ref().join(
-            src.file_name()
-                .ok_or_else(|| anyhow!("Invalid source filename"))?,
+    /// Execute a cargo call
+    ///
+    fn execute_cargo_call(call: &CargoCall, project_info: &ProjectInfo) -> Result<i32> {
+        let exit_code = build_cargo_call_with_args::<&str>(call, project_info, &[])
+            .status()?
+            .code()
+            .unwrap_or_default();
+        Ok(exit_code)
+    }
+
+    fn build_cargo_call_with_args<S: AsRef<OsStr>>(
+        call: &CargoCall,
+        project_info: &ProjectInfo,
+        extra_args: &[S],
+    ) -> Command {
+        let mut result = Command::new("cargo");
+        result
+            .arg(call.command.as_str())
+            .arg("--manifest-path")
+            .arg(project_info.manifest_path.as_os_str())
+            .args(extra_args)
+            .args(call.args.iter());
+
+        result
+    }
+
+    /// Prepare the cargo project directory
+    ///
+    /// This commands writes the manifest and copies the source file. After this
+    /// step, cargo calls can be made against this directory.
+    ///
+    fn prepare_manifest_dir(
+        target: impl AsRef<Path>,
+        env: &impl ExecutionEnv,
+    ) -> Result<ProjectInfo> {
+        let target = target.as_ref();
+        let manifest_dir = find_project_dir(target, env)?;
+        let manifest_path = manifest_dir.join("Cargo.toml");
+
+        let source_path = target
+            .file_name()
+            .ok_or_else(|| anyhow!("Cannot handle directory source"))?;
+        let source_path = manifest_dir.join(source_path);
+
+        // TODO: get the name from the normalized manifest in case the user has overwritten it
+        let name = to_utf8_string(
+            target
+                .file_stem()
+                .ok_or_else(|| anyhow!("Could not get name"))?,
+        )?;
+
+        let manifest = parse_manifest_file(target)?;
+        let manifest = normalize_manifest(manifest, target, env)?;
+
+        // perform any faillible operations
+        fs::create_dir_all(&manifest_dir)?;
+        fs::write(&manifest_path, toml::to_string(&manifest)?)?;
+        fs::copy(target, source_path)?;
+
+        return Ok(ProjectInfo {
+            manifest_path,
+            manifest_dir,
+            name,
+        });
+
+        fn parse_manifest_file(path: impl AsRef<Path>) -> Result<Value> {
+            let file = File::open(path)?;
+            parse_manifest(file)
+        }
+    }
+
+    /// Execute a cargo call and collect any generated artifacts
+    ///
+    fn collect_build_artifacts(
+        call: &CargoCall,
+        project_info: &ProjectInfo,
+    ) -> Result<Vec<String>> {
+        let output = build_cargo_call_with_args(call, project_info, &["--message-format", "json"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()?;
+
+        let exit_code = output.status.code().unwrap_or_default();
+        ensure!(
+            exit_code == 0,
+            "Error during running cargo. Exit code {}",
+            exit_code
         );
 
-        fs::copy(src, dst)?;
+        let artifacts = parse_build_output(output.stdout.as_slice(), &project_info)?;
+        Ok(artifacts)
     }
-    Ok(())
-}
 
-struct ProjectInfo {
-    name: String,
-    manifest_path: PathBuf,
-    manifest_dir: PathBuf,
-}
+    /// Parse the output of a cargo build step
+    ///
+    fn parse_build_output(output: &[u8], project_info: &ProjectInfo) -> Result<Vec<String>> {
+        let mut result = Vec::new();
+        let reader = BufReader::new(output);
+        for line in reader.lines() {
+            let line = line?;
+            let value: JsonValue = serde_json::from_str(&line)?;
 
-/// Find the project directory from the supplied file
-///
-fn find_project_dir(source: impl AsRef<Path>, env: &impl ExecutionEnv) -> Result<PathBuf> {
-    let source = source.as_ref();
+            let reason = value
+                .get("reason")
+                .and_then(JsonValue::as_str)
+                .ok_or_else(|| anyhow!("Invalid cargo output reason not a string"))?;
 
-    let target_name = source
-        .file_stem()
-        .ok_or_else(|| anyhow!("Could not get path stem"))?;
-    let mut target_name = target_name.to_owned();
-    target_name.push("-");
-    target_name.push(&hash_path(source));
+            if reason != "compiler-artifact" {
+                continue;
+            }
 
-    let mut result = find_cache_dir(env)?;
-    result.push(target_name);
+            let package_id = value
+                .get("package_id")
+                .and_then(JsonValue::as_str)
+                .ok_or_else(|| anyhow!("Invalid compiler-artifact: package_id not a string"))?;
 
-    Ok(result)
-}
+            let needle = format!("{} ", project_info.name);
+            if !package_id.starts_with(&needle) {
+                continue;
+            }
 
-/// Find the internal cache dir for cargo-wop
-///
-fn find_cache_dir(env: &impl ExecutionEnv) -> Result<PathBuf> {
-    let mut result = env.get_cargo_home_dir();
-    result.push("wop-cache");
-    Ok(result)
-}
+            let filenames = value
+                .get("filenames")
+                .and_then(JsonValue::as_array)
+                .ok_or_else(|| anyhow!("Invalid compiler-artifact: filenames not an array"))?;
 
-fn hash_path(path: impl AsRef<Path>) -> String {
-    let mut hash = Sha1::new();
-    hash.update(path.as_ref().to_string_lossy().as_bytes());
-    let digest = hash.digest();
-    let res = digest.to_string();
-    res[..8].to_string()
+            for filename in filenames {
+                let filename = filename
+                    .as_str()
+                    .ok_or_else(|| anyhow!("Invalid file name not a string"))?;
+                result.push(filename.to_owned());
+            }
+        }
+        Ok(result)
+    }
+
+    fn copy_build_artifacts<I, P, T>(from: I, to: T) -> Result<()>
+    where
+        I: IntoIterator<Item = P>,
+        P: AsRef<Path>,
+        T: AsRef<Path>,
+    {
+        for src in from {
+            let src = src.as_ref();
+            let dst = to.as_ref().join(
+                src.file_name()
+                    .ok_or_else(|| anyhow!("Invalid source filename"))?,
+            );
+
+            fs::copy(src, dst)?;
+        }
+        Ok(())
+    }
+
+    struct ProjectInfo {
+        name: String,
+        manifest_path: PathBuf,
+        manifest_dir: PathBuf,
+    }
+
+    /// Find the project directory from the supplied file
+    ///
+    fn find_project_dir(source: impl AsRef<Path>, env: &impl ExecutionEnv) -> Result<PathBuf> {
+        let source = source.as_ref();
+
+        let target_name = source
+            .file_stem()
+            .ok_or_else(|| anyhow!("Could not get path stem"))?;
+        let mut target_name = target_name.to_owned();
+        target_name.push("-");
+        target_name.push(&hash_path(source));
+
+        let mut result = find_cache_dir(env)?;
+        result.push(target_name);
+
+        Ok(result)
+    }
+
+    /// Find the internal cache dir for cargo-wop
+    ///
+    fn find_cache_dir(env: &impl ExecutionEnv) -> Result<PathBuf> {
+        let mut result = env.get_cargo_home_dir();
+        result.push("wop-cache");
+        Ok(result)
+    }
+
+    fn hash_path(path: impl AsRef<Path>) -> String {
+        let mut hash = Sha1::new();
+        hash.update(path.as_ref().to_string_lossy().as_bytes());
+        let digest = hash.digest();
+        let res = digest.to_string();
+        res[..8].to_string()
+    }
 }
 
 mod execution_env {
@@ -532,239 +549,254 @@ mod execution_env {
     }
 }
 
-/// Normalize the embedded manifest that it can be used to build the target
-///
-/// This function inserts a package section with name, version, and edition. It
-/// makes sure at least a single target exists (a binary as a default). For each
-/// target it sets the correct path to the source file.
-///
-fn normalize_manifest(
-    mut manifest: Value,
-    target_path: impl AsRef<Path>,
-    env: &impl ExecutionEnv,
-) -> Result<Value> {
-    let target_path = target_path.as_ref();
-    let target_directory = target_path
-        .parent()
-        .ok_or_else(|| anyhow!("Cannot get parent of target path"))?
-        .to_owned();
-    let (local_target_path, target_name) = get_path_info(target_path)?;
+mod manifest_normalization {
+    use std::path::Path;
 
-    let root = manifest
-        .as_table_mut()
-        .ok_or_else(|| anyhow!("Can only handle manifests that are tables"))?;
+    use anyhow::{anyhow, Context, Result};
+    use toml::Value;
 
-    ensure_valid_package(root, &target_name).context("Error while modifying package")?;
-    ensure_at_least_a_single_target(root).context("Error while ensuring a valid target")?;
+    use super::{execution_env::ExecutionEnv, util::to_utf8_string};
 
-    patch_all_targets(root, &local_target_path, &target_name)
-        .context("Error while patching the targets")?;
-    patch_all_dependencies(root, &target_directory, env)
-        .context("Error while patching the dependencies")?;
+    /// Normalize the embedded manifest that it can be used to build the target
+    ///
+    /// This function inserts a package section with name, version, and edition. It
+    /// makes sure at least a single target exists (a binary as a default). For each
+    /// target it sets the correct path to the source file.
+    ///
+    pub fn normalize_manifest(
+        mut manifest: Value,
+        target_path: impl AsRef<Path>,
+        env: &impl ExecutionEnv,
+    ) -> Result<Value> {
+        let target_path = target_path.as_ref();
+        let target_directory = target_path
+            .parent()
+            .ok_or_else(|| anyhow!("Cannot get parent of target path"))?
+            .to_owned();
+        let (local_target_path, target_name) = get_path_info(target_path)?;
 
-    Ok(manifest)
-}
+        let root = manifest
+            .as_table_mut()
+            .ok_or_else(|| anyhow!("Can only handle manifests that are tables"))?;
 
-/// Helper for normalize_manifest: Get the file name and stem from a path
-///
-fn get_path_info(path: impl AsRef<Path>) -> Result<(String, String)> {
-    let path = path.as_ref();
+        ensure_valid_package(root, &target_name).context("Error while modifying package")?;
+        ensure_at_least_a_single_target(root).context("Error while ensuring a valid target")?;
 
-    let target_name = to_utf8_string(
-        path.file_stem()
-            .ok_or_else(|| anyhow!("Cannot build manifest for non file target"))?,
-    )?;
-    let target_path = path
-        .file_name()
-        .ok_or_else(|| anyhow!("Cannot build manifest for non file target"))?
-        .to_str()
-        .ok_or_else(|| anyhow!("Cannot build manifest for paths not-expressible in utf-8"))?
-        .to_owned();
+        patch_all_targets(root, &local_target_path, &target_name)
+            .context("Error while patching the targets")?;
+        patch_all_dependencies(root, &target_directory, env)
+            .context("Error while patching the dependencies")?;
 
-    Ok((target_path, target_name))
-}
-
-/// Helper for normalize_manifest: Ensure the package table is correctly filled
-///
-fn ensure_valid_package(root: &mut toml::map::Map<String, Value>, name: &str) -> Result<()> {
-    if !root.contains_key("package") {
-        root.insert(String::from("package"), Value::Table(Default::default()));
-    }
-    let package = root
-        .get_mut("package")
-        .unwrap()
-        .as_table_mut()
-        .ok_or_else(|| anyhow!("Invalid manifest: package is not a table"))?;
-
-    if !package.contains_key("name") {
-        package.insert(String::from("name"), Value::from(name));
-    }
-    if !package.contains_key("version") {
-        package.insert(String::from("version"), Value::from("0.1.0"));
+        Ok(manifest)
     }
 
-    if !package.contains_key("edition") {
-        package.insert(String::from("edition"), Value::from("2018"));
+    /// Helper for normalize_manifest: Get the file name and stem from a path
+    ///
+    fn get_path_info(path: impl AsRef<Path>) -> Result<(String, String)> {
+        let path = path.as_ref();
+
+        let target_name = to_utf8_string(
+            path.file_stem()
+                .ok_or_else(|| anyhow!("Cannot build manifest for non file target"))?,
+        )?;
+        let target_path = path
+            .file_name()
+            .ok_or_else(|| anyhow!("Cannot build manifest for non file target"))?
+            .to_str()
+            .ok_or_else(|| anyhow!("Cannot build manifest for paths not-expressible in utf-8"))?
+            .to_owned();
+
+        Ok((target_path, target_name))
     }
 
-    Ok(())
-}
+    /// Helper for normalize_manifest: Ensure the package table is correctly filled
+    ///
+    fn ensure_valid_package(root: &mut toml::map::Map<String, Value>, name: &str) -> Result<()> {
+        if !root.contains_key("package") {
+            root.insert(String::from("package"), Value::Table(Default::default()));
+        }
+        let package = root
+            .get_mut("package")
+            .unwrap()
+            .as_table_mut()
+            .ok_or_else(|| anyhow!("Invalid manifest: package is not a table"))?;
 
-/// Helper for normalize manifest: Ensure at least a single target is available
-///
-fn ensure_at_least_a_single_target(root: &mut toml::map::Map<String, Value>) -> Result<()> {
-    let has_single_bin = root.contains_key("bin")
-        && root
-            .get("bin")
-            .and_then(|b| b.as_array())
-            .map(|b| !b.is_empty())
-            .ok_or_else(|| anyhow!("Invalid manifest"))?;
-    let has_definition = root.contains_key("lib") || has_single_bin;
+        if !package.contains_key("name") {
+            package.insert(String::from("name"), Value::from(name));
+        }
+        if !package.contains_key("version") {
+            package.insert(String::from("version"), Value::from("0.1.0"));
+        }
 
-    if has_definition {
-        return Ok(());
+        if !package.contains_key("edition") {
+            package.insert(String::from("edition"), Value::from("2018"));
+        }
+
+        Ok(())
     }
 
-    root.insert(String::from("bin"), Value::Array(Default::default()));
+    /// Helper for normalize manifest: Ensure at least a single target is available
+    ///
+    fn ensure_at_least_a_single_target(root: &mut toml::map::Map<String, Value>) -> Result<()> {
+        let has_single_bin = root.contains_key("bin")
+            && root
+                .get("bin")
+                .and_then(|b| b.as_array())
+                .map(|b| !b.is_empty())
+                .ok_or_else(|| anyhow!("Invalid manifest"))?;
+        let has_definition = root.contains_key("lib") || has_single_bin;
 
-    let bins = root
-        .get_mut("bin")
-        .unwrap()
-        .as_array_mut()
-        .ok_or_else(|| anyhow!("Invalid manifest: bin is not an array"))?;
-    if bins.is_empty() {
-        bins.push(Value::Table(Default::default()));
-    }
+        if has_definition {
+            return Ok(());
+        }
 
-    Ok(())
-}
+        root.insert(String::from("bin"), Value::Array(Default::default()));
 
-/// Patch all available target definition
-fn patch_all_targets(
-    root: &mut toml::map::Map<String, Value>,
-    path: &str,
-    name: &str,
-) -> Result<()> {
-    if let Some(lib) = root.get_mut("lib") {
-        patch_target(lib, &path, &name)?;
-    }
-
-    if let Some(bins) = root.get_mut("bin") {
-        let bins = bins
+        let bins = root
+            .get_mut("bin")
+            .unwrap()
             .as_array_mut()
-            .ok_or_else(|| anyhow!("Invalid manifest: bin not an array"))?;
-
-        for bin in bins {
-            patch_target(bin, &path, &name)?;
+            .ok_or_else(|| anyhow!("Invalid manifest: bin is not an array"))?;
+        if bins.is_empty() {
+            bins.push(Value::Table(Default::default()));
         }
+
+        Ok(())
     }
 
-    Ok(())
-}
+    /// Patch all available target definition
+    fn patch_all_targets(
+        root: &mut toml::map::Map<String, Value>,
+        path: &str,
+        name: &str,
+    ) -> Result<()> {
+        if let Some(lib) = root.get_mut("lib") {
+            patch_target(lib, &path, &name)?;
+        }
 
-/// Helper for normalize manifest: patch the target definition to use the correct file path
-fn patch_target(target: &mut Value, path: &str, name: &str) -> Result<()> {
-    let bin = target
-        .as_table_mut()
-        .ok_or_else(|| anyhow!("Cannot patch non table target"))?;
-    bin.insert(String::from("path"), Value::String(path.to_owned()));
+        if let Some(bins) = root.get_mut("bin") {
+            let bins = bins
+                .as_array_mut()
+                .ok_or_else(|| anyhow!("Invalid manifest: bin not an array"))?;
 
-    if !bin.contains_key("name") {
-        bin.insert(String::from("name"), Value::String(name.to_owned()));
+            for bin in bins {
+                patch_target(bin, &path, &name)?;
+            }
+        }
+
+        Ok(())
     }
 
-    Ok(())
-}
+    /// Helper for normalize manifest: patch the target definition to use the correct file path
+    fn patch_target(target: &mut Value, path: &str, name: &str) -> Result<()> {
+        let bin = target
+            .as_table_mut()
+            .ok_or_else(|| anyhow!("Cannot patch non table target"))?;
+        bin.insert(String::from("path"), Value::String(path.to_owned()));
 
-/// Replace all path dependencies with absolute paths
-///
-fn patch_all_dependencies(
-    root: &mut toml::map::Map<String, Value>,
-    project_source_path: impl AsRef<Path>,
-    env: &impl ExecutionEnv,
-) -> Result<()> {
-    let project_source_path = project_source_path.as_ref();
+        if !bin.contains_key("name") {
+            bin.insert(String::from("name"), Value::String(name.to_owned()));
+        }
 
-    for dep_root_key in &["dependencies", "dev-dependencies", "build-dependencies"] {
-        if let Some(dep_root) = root.get_mut(*dep_root_key) {
-            let dep_root = dep_root
-                .as_table_mut()
-                .ok_or_else(|| anyhow!("Invalid manifest {} not an array", *dep_root_key))?;
+        Ok(())
+    }
 
-            for dep in dep_root {
-                let dep = dep.1;
-                let dep = match dep.as_table_mut() {
-                    Some(dep) => dep,
-                    None => continue,
-                };
+    /// Replace all path dependencies with absolute paths
+    ///
+    fn patch_all_dependencies(
+        root: &mut toml::map::Map<String, Value>,
+        project_source_path: impl AsRef<Path>,
+        env: &impl ExecutionEnv,
+    ) -> Result<()> {
+        let project_source_path = project_source_path.as_ref();
 
-                if !dep.contains_key("path") {
-                    continue;
+        for dep_root_key in &["dependencies", "dev-dependencies", "build-dependencies"] {
+            if let Some(dep_root) = root.get_mut(*dep_root_key) {
+                let dep_root = dep_root
+                    .as_table_mut()
+                    .ok_or_else(|| anyhow!("Invalid manifest {} not an array", *dep_root_key))?;
+
+                for dep in dep_root {
+                    let dep = dep.1;
+                    let dep = match dep.as_table_mut() {
+                        Some(dep) => dep,
+                        None => continue,
+                    };
+
+                    if !dep.contains_key("path") {
+                        continue;
+                    }
+
+                    let path = dep
+                        .get("path")
+                        .unwrap()
+                        .as_str()
+                        .ok_or_else(|| anyhow!("Invalid manifest: non string path"))?;
+                    let path = env.normalize(project_source_path.join(path))?;
+                    let path = path
+                        .to_str()
+                        .ok_or_else(|| anyhow!("Cannot interpret dependency path a string"))?;
+                    dep.insert(String::from("path"), path.into());
                 }
-
-                let path = dep
-                    .get("path")
-                    .unwrap()
-                    .as_str()
-                    .ok_or_else(|| anyhow!("Invalid manifest: non string path"))?;
-                let path = env.normalize(project_source_path.join(path))?;
-                let path = path
-                    .to_str()
-                    .ok_or_else(|| anyhow!("Cannot interpret dependency path a string"))?;
-                dep.insert(String::from("path"), path.into());
             }
         }
-    }
 
-    Ok(())
+        Ok(())
+    }
 }
 
-fn parse_manifest_file(path: impl AsRef<Path>) -> Result<Value> {
-    let file = File::open(path)?;
-    parse_manifest(file)
-}
+mod manifest_parsing {
+    use std::io::{BufRead, BufReader, Read};
 
-/// Parse the manifest from the initial doc comment
-///
-fn parse_manifest(reader: impl Read) -> Result<Value> {
-    let reader = BufReader::new(reader);
+    use anyhow::{bail, Result};
+    use toml::Value;
 
-    let mut state = ParseState::Start;
-    let mut result = String::new();
+    /// Parse the manifest from the initial doc comment
+    ///
+    pub fn parse_manifest(reader: impl Read) -> Result<Value> {
+        let reader = BufReader::new(reader);
 
-    for line in reader.lines() {
-        let line = line?;
-        let line_start = LineStart::from(line.as_str());
+        let mut state = ParseState::Start;
+        let mut result = String::new();
 
-        state = match (state, line_start) {
-            (ParseState::Start, LineStart::Other) => return Ok(Value::Table(Default::default())),
-            (ParseState::DocComment, LineStart::Other) => {
-                return Ok(Value::Table(Default::default()))
-            }
-            (ParseState::Start, LineStart::DocComment) => ParseState::DocComment,
-            (ParseState::Start, LineStart::ManifestEnd) => state,
-            (ParseState::DocComment, LineStart::DocComment) => state,
-            (ParseState::DocComment, LineStart::ManifestEnd) => state,
-            (ParseState::Start, LineStart::ManifestStart) => ParseState::Manifest,
-            (ParseState::DocComment, LineStart::ManifestStart) => ParseState::Manifest,
+        for line in reader.lines() {
+            let line = line?;
+            let line_start = LineStart::from(line.as_str());
 
-            (ParseState::Manifest, LineStart::DocComment) => {
-                let line = line.strip_prefix("//!").unwrap().trim_start();
-                result.push_str(line);
-                result.push('\n');
-                state
-            }
-            (ParseState::Manifest, LineStart::ManifestEnd) => return Ok(toml::from_str(&result)?),
-            (ParseState::Manifest, LineStart::ManifestStart) => bail!("Invalid manifest"),
-            (ParseState::Manifest, LineStart::Other) => bail!("Invalid manifest"),
-        };
+            state = match (state, line_start) {
+                (ParseState::Start, LineStart::Other) => {
+                    return Ok(Value::Table(Default::default()))
+                }
+                (ParseState::DocComment, LineStart::Other) => {
+                    return Ok(Value::Table(Default::default()))
+                }
+                (ParseState::Start, LineStart::DocComment) => ParseState::DocComment,
+                (ParseState::Start, LineStart::ManifestEnd) => state,
+                (ParseState::DocComment, LineStart::DocComment) => state,
+                (ParseState::DocComment, LineStart::ManifestEnd) => state,
+                (ParseState::Start, LineStart::ManifestStart) => ParseState::Manifest,
+                (ParseState::DocComment, LineStart::ManifestStart) => ParseState::Manifest,
+
+                (ParseState::Manifest, LineStart::DocComment) => {
+                    let line = line.strip_prefix("//!").unwrap().trim_start();
+                    result.push_str(line);
+                    result.push('\n');
+                    state
+                }
+                (ParseState::Manifest, LineStart::ManifestEnd) => {
+                    return Ok(toml::from_str(&result)?)
+                }
+                (ParseState::Manifest, LineStart::ManifestStart) => bail!("Invalid manifest"),
+                (ParseState::Manifest, LineStart::Other) => bail!("Invalid manifest"),
+            };
+        }
+
+        if state == ParseState::Manifest {
+            bail!("Incomplete manifest");
+        }
+
+        Ok(Value::Table(Default::default()))
     }
-
-    if state == ParseState::Manifest {
-        bail!("Incomplete manifest");
-    }
-
-    return Ok(Value::Table(Default::default()));
 
     #[derive(Debug, PartialEq, Clone, Copy)]
     enum ParseState {
@@ -811,7 +843,7 @@ mod util {
 
 #[cfg(test)]
 mod test_parse_args {
-    use super::{Args, CargoCall};
+    use super::argparse::{Args, CargoCall};
     use anyhow::Result;
     use std::ffi::OsString;
 
@@ -865,7 +897,7 @@ mod test_parse_args {
 
 #[cfg(test)]
 mod test_parse_manifest {
-    use super::parse_manifest;
+    use super::manifest_parsing::parse_manifest;
     use anyhow::Result;
 
     const EXAMPLE: &str = r#"//! cargo-wop
