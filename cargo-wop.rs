@@ -171,7 +171,7 @@ fn execute_args(args: Args, env: &impl ExecutionEnv) -> Result<i32> {
 ///
 fn prepare_manifest_dir(target: impl AsRef<Path>, env: &impl ExecutionEnv) -> Result<ProjectInfo> {
     let target = target.as_ref();
-    let manifest_dir = find_project_dir(target)?;
+    let manifest_dir = find_project_dir(target, env)?;
     let manifest_path = manifest_dir.join("Cargo.toml");
 
     let source_path = target
@@ -422,7 +422,7 @@ impl CargoCall {
 
 /// Find the project directory from the supplied file
 ///
-fn find_project_dir(source: impl AsRef<Path>) -> Result<PathBuf> {
+fn find_project_dir(source: impl AsRef<Path>, env: &impl ExecutionEnv) -> Result<PathBuf> {
     let source = source.as_ref();
 
     let target_name = source
@@ -432,7 +432,7 @@ fn find_project_dir(source: impl AsRef<Path>) -> Result<PathBuf> {
     target_name.push("-");
     target_name.push(&hash_path(source));
 
-    let mut result = find_cache_dir()?;
+    let mut result = find_cache_dir(env)?;
     result.push(target_name);
 
     Ok(result)
@@ -440,37 +440,10 @@ fn find_project_dir(source: impl AsRef<Path>) -> Result<PathBuf> {
 
 /// Find the internal cache dir for cargo-wop
 ///
-fn find_cache_dir() -> Result<PathBuf> {
-    let mut result = find_cargo_home_dir()?;
+fn find_cache_dir(env: &impl ExecutionEnv) -> Result<PathBuf> {
+    let mut result = env.get_cargo_home_dir();
     result.push("wop-cache");
     Ok(result)
-}
-
-/// Find the cargo home
-///
-/// Follow the documentation found
-/// [here](https://doc.rust-lang.org/cargo/reference/environment-variables.html).
-///
-fn find_cargo_home_dir() -> Result<PathBuf> {
-    if let Some(cargo_home) = std::env::var_os("CARGO_HOME") {
-        let cargo_home = PathBuf::from(cargo_home);
-        return Ok(cargo_home);
-    }
-
-    let env_var = if std::env::consts::OS == "windows" {
-        "HOME"
-    } else {
-        "USERPROFILE"
-    };
-
-    // TODO: handle windows
-    if let Some(user_home) = std::env::var_os(env_var) {
-        let mut user_home = PathBuf::from(user_home);
-        user_home.push(".cargo");
-        return Ok(user_home);
-    }
-
-    bail!("Could not determine cargo home directory");
 }
 
 fn hash_path(path: impl AsRef<Path>) -> String {
