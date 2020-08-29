@@ -22,18 +22,22 @@ use std::{
     process::{Command, Stdio},
 };
 
-use anyhow::{anyhow, bail, ensure, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use serde_json::{self, Value as JsonValue};
 use sha1::Sha1;
 use toml::{self, Value};
+
+use execution_env::{ExecutionEnv, StdExecutionEnv};
 
 fn main() -> Result<()> {
     std::process::exit(main_impl()?);
 }
 
 fn main_impl() -> Result<i32> {
+    let env = StdExecutionEnv::new()?;
+
     let args = parse_args(std::env::args_os().skip(1))?;
-    let res = execute_args(args, std::env::current_dir()?)?;
+    let res = execute_args(args, &env)?;
     Ok(res)
 }
 
@@ -108,17 +112,15 @@ fn is_cargo_command(command: &str) -> bool {
     }
 }
 
-fn execute_args(args: Args, refpath: impl AsRef<Path>) -> Result<i32> {
-    let refpath = refpath.as_ref();
-
+fn execute_args(args: Args, env: &impl ExecutionEnv) -> Result<i32> {
     match args {
         Args::GenericCargoCall(call) => {
-            let project_info = prepare_manifest_dir(&call.target, refpath)?;
+            let project_info = prepare_manifest_dir(&call.target, env)?;
             let exit_code = call.execute(&project_info)?;
             Ok(exit_code)
         }
         Args::BuildCargoCall(call) => {
-            let project_info = prepare_manifest_dir(&call.target, refpath)?;
+            let project_info = prepare_manifest_dir(&call.target, env)?;
             let result = call.execute(&project_info)?;
             ensure!(
                 result == 0,
@@ -129,7 +131,7 @@ fn execute_args(args: Args, refpath: impl AsRef<Path>) -> Result<i32> {
             Ok(0)
         }
         Args::InstallCargoCall(call) => {
-            let project_info = prepare_manifest_dir(&call.target, refpath)?;
+            let project_info = prepare_manifest_dir(&call.target, env)?;
             let mut command = Command::new("cargo");
             command
                 .arg(call.command.as_str())
@@ -142,14 +144,15 @@ fn execute_args(args: Args, refpath: impl AsRef<Path>) -> Result<i32> {
         }
         Args::Manifest(target) => {
             // TODO: remove the duplication of file + parse + normalize?
-            let file = File::open(target.as_path())?;
-            let manifest = parse_manifest(file)?;
-            let manifest = normalize_manifest(manifest, target.as_path(), refpath)?;
+            let file = File::open(target.as_path()).context("Error while opening manifest path")?;
+            let manifest = parse_manifest(file).context("Error while parsing manifest path")?;
+            let manifest = normalize_manifest(manifest, target.as_path(), env)
+                .context("Error during normalizing manifest")?;
             print!("{}", toml::to_string(&manifest)?);
             Ok(0)
         }
         Args::Exec(exec) => {
-            let project_info = prepare_manifest_dir(exec.target.as_path(), refpath)?;
+            let project_info = prepare_manifest_dir(exec.target.as_path(), env)?;
             let mut command = Command::new(&exec.command);
             command
                 .args(exec.args.iter().cloned())
@@ -166,12 +169,9 @@ fn execute_args(args: Args, refpath: impl AsRef<Path>) -> Result<i32> {
 /// This commands writes the manifest and copies the source file. After this
 /// step, cargo calls can be made against this directory.
 ///
-fn prepare_manifest_dir(
-    target: impl AsRef<Path>,
-    refpath: impl AsRef<Path>,
-) -> Result<ProjectInfo> {
-    let target = refpath.as_ref().join(target);
-    let manifest_dir = find_project_dir(target.as_path())?;
+fn prepare_manifest_dir(target: impl AsRef<Path>, env: &impl ExecutionEnv) -> Result<ProjectInfo> {
+    let target = target.as_ref();
+    let manifest_dir = find_project_dir(target)?;
     let manifest_path = manifest_dir.join("Cargo.toml");
 
     let source_path = target
@@ -186,13 +186,13 @@ fn prepare_manifest_dir(
             .ok_or_else(|| anyhow!("Could not get name"))?,
     )?;
 
-    let manifest = parse_manifest_file(target.as_path())?;
-    let manifest = normalize_manifest(manifest, target.as_path(), refpath)?;
+    let manifest = parse_manifest_file(target)?;
+    let manifest = normalize_manifest(manifest, target, env)?;
 
     // perform any faillible operations
     fs::create_dir_all(&manifest_dir)?;
     fs::write(&manifest_path, toml::to_string(&manifest)?)?;
-    fs::copy(target.as_path(), source_path.as_path())?;
+    fs::copy(target, source_path)?;
 
     Ok(ProjectInfo {
         manifest_path,
@@ -481,6 +481,77 @@ fn hash_path(path: impl AsRef<Path>) -> String {
     res[..8].to_string()
 }
 
+mod execution_env {
+    use std::path::{Path, PathBuf};
+
+    use anyhow::{bail, Context, Result};
+
+    /// The environment the command is executed in
+    ///
+    /// It's defined as a trait to mock it out in tests.
+    ///
+    pub trait ExecutionEnv {
+        fn get_cargo_home_dir(&self) -> PathBuf;
+        fn normalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf>;
+    }
+
+    pub struct StdExecutionEnv {
+        working_directory: PathBuf,
+        cargo_directory: PathBuf,
+    }
+
+    impl StdExecutionEnv {
+        pub fn new() -> Result<Self> {
+            let this = Self {
+                working_directory: std::env::current_dir()?,
+                cargo_directory: find_cargo_home_dir()?,
+            };
+            Ok(this)
+        }
+    }
+
+    impl ExecutionEnv for StdExecutionEnv {
+        fn get_cargo_home_dir(&self) -> PathBuf {
+            self.cargo_directory.clone()
+        }
+
+        fn normalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf> {
+            let p = self.working_directory.join(path);
+            let p = p
+                .canonicalize()
+                .with_context(|| format!("Cannot canonicalize {}", p.display()))?;
+            Ok(p)
+        }
+    }
+
+    /// Find the cargo home
+    ///
+    /// Follow the documentation found
+    /// [here](https://doc.rust-lang.org/cargo/reference/environment-variables.html).
+    ///
+    fn find_cargo_home_dir() -> Result<PathBuf> {
+        if let Some(cargo_home) = std::env::var_os("CARGO_HOME") {
+            let cargo_home = PathBuf::from(cargo_home);
+            return Ok(cargo_home);
+        }
+
+        let env_var = if std::env::consts::OS == "windows" {
+            "HOME"
+        } else {
+            "USERPROFILE"
+        };
+
+        // TODO: handle windows
+        if let Some(user_home) = std::env::var_os(env_var) {
+            let mut user_home = PathBuf::from(user_home);
+            user_home.push(".cargo");
+            return Ok(user_home);
+        }
+
+        bail!("Could not determine cargo home directory");
+    }
+}
+
 /// Normalize the embedded manifest that it can be used to build the target
 ///
 /// This function inserts a package section with name, version, and edition. It
@@ -490,26 +561,26 @@ fn hash_path(path: impl AsRef<Path>) -> String {
 fn normalize_manifest(
     mut manifest: Value,
     target_path: impl AsRef<Path>,
-    refpath: impl AsRef<Path>,
+    env: &impl ExecutionEnv,
 ) -> Result<Value> {
     let target_path = target_path.as_ref();
-    let project_dir = refpath
-        .as_ref()
-        .join(target_path)
+    let target_directory = target_path
         .parent()
-        .ok_or_else(|| anyhow!("Invalid file path"))?
+        .ok_or_else(|| anyhow!("Cannot get parent of target path"))?
         .to_owned();
-    let (target_path, target_name) = get_path_info(target_path)?;
+    let (local_target_path, target_name) = get_path_info(target_path)?;
 
     let root = manifest
         .as_table_mut()
         .ok_or_else(|| anyhow!("Can only handle manifests that are tables"))?;
 
-    ensure_valid_package(root, &target_name)?;
-    ensure_at_least_a_single_target(root)?;
+    ensure_valid_package(root, &target_name).context("Error while modifying package")?;
+    ensure_at_least_a_single_target(root).context("Error while ensuring a valid target")?;
 
-    patch_all_targets(root, &target_path, &target_name)?;
-    patch_all_dependencies(root, &project_dir, refpath)?;
+    patch_all_targets(root, &local_target_path, &target_name)
+        .context("Error while patching the targets")?;
+    patch_all_dependencies(root, &target_directory, env)
+        .context("Error while patching the dependencies")?;
 
     Ok(manifest)
 }
@@ -629,10 +700,11 @@ fn patch_target(target: &mut Value, path: &str, name: &str) -> Result<()> {
 ///
 fn patch_all_dependencies(
     root: &mut toml::map::Map<String, Value>,
-    project_dir: &Path,
-    refpath: impl AsRef<Path>,
+    project_source_path: impl AsRef<Path>,
+    env: &impl ExecutionEnv,
 ) -> Result<()> {
-    let refpath = refpath.as_ref();
+    let project_source_path = project_source_path.as_ref();
+
     for dep_root_key in &["dependencies", "dev-dependencies", "build-dependencies"] {
         if let Some(dep_root) = root.get_mut(*dep_root_key) {
             let dep_root = dep_root
@@ -655,8 +727,7 @@ fn patch_all_dependencies(
                     .unwrap()
                     .as_str()
                     .ok_or_else(|| anyhow!("Invalid manifest: non string path"))?;
-                let path = refpath.join(project_dir).join(path);
-                let path = path.canonicalize()?;
+                let path = env.normalize(project_source_path.join(path))?;
                 let path = path
                     .to_str()
                     .ok_or_else(|| anyhow!("Cannot interpret dependency path a string"))?;
@@ -829,5 +900,25 @@ use std::fs;"
 
         assert_eq!(actual, expected);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test_rust_path_handling {
+    use std::path::PathBuf;
+
+    fn parent_path(p: &str) -> Option<PathBuf> {
+        PathBuf::from(p).parent().map(|p| p.to_owned())
+    }
+
+    #[test]
+    fn examples() {
+        assert_eq!(parent_path("example.rs"), Some(PathBuf::from("")));
+        assert_eq!(parent_path("./example.rs"), Some(PathBuf::from(".")));
+        assert_eq!(parent_path("foo/example.rs"), Some(PathBuf::from("foo")));
+        assert_eq!(
+            parent_path("foo/bar/example.rs"),
+            Some(PathBuf::from("foo/bar"))
+        );
     }
 }
