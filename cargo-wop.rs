@@ -1,11 +1,17 @@
 //! cargo-wop
 //!
 //! ```cargo
+//! [package]
+//! name = "cargo-wop"
+//!
 //! [dependencies]
 //! anyhow = "1.0"
 //! serde_json = "1.0"
 //! sha1 = "0.6.0"
 //! toml = "0.5"
+//!
+//! [[bin]]
+//! name = "cargo-wop"
 //! ```
 //!
 use std::{
@@ -160,7 +166,10 @@ fn execute_args(args: Args, refpath: impl AsRef<Path>) -> Result<i32> {
 /// This commands writes the manifest and copies the source file. After this
 /// step, cargo calls can be made against this directory.
 ///
-fn prepare_manifest_dir(target: impl AsRef<Path>, refpath: impl AsRef<Path>) -> Result<ProjectInfo> {
+fn prepare_manifest_dir(
+    target: impl AsRef<Path>,
+    refpath: impl AsRef<Path>,
+) -> Result<ProjectInfo> {
     let target = refpath.as_ref().join(target);
     let manifest_dir = find_project_dir(target.as_path())?;
     let manifest_path = manifest_dir.join("Cargo.toml");
@@ -478,9 +487,15 @@ fn hash_path(path: impl AsRef<Path>) -> String {
 /// makes sure at least a single target exists (a binary as a default). For each
 /// target it sets the correct path to the source file.
 ///
-fn normalize_manifest(mut manifest: Value, target_path: impl AsRef<Path>, refpath: impl AsRef<Path>) -> Result<Value> {
+fn normalize_manifest(
+    mut manifest: Value,
+    target_path: impl AsRef<Path>,
+    refpath: impl AsRef<Path>,
+) -> Result<Value> {
     let target_path = target_path.as_ref();
-    let project_dir = refpath.as_ref().join(target_path)
+    let project_dir = refpath
+        .as_ref()
+        .join(target_path)
         .parent()
         .ok_or_else(|| anyhow!("Invalid file path"))?
         .to_owned();
@@ -615,7 +630,7 @@ fn patch_target(target: &mut Value, path: &str, name: &str) -> Result<()> {
 fn patch_all_dependencies(
     root: &mut toml::map::Map<String, Value>,
     project_dir: &Path,
-    refpath: impl AsRef<Path>
+    refpath: impl AsRef<Path>,
 ) -> Result<()> {
     let refpath = refpath.as_ref();
     for dep_root_key in &["dependencies", "dev-dependencies", "build-dependencies"] {

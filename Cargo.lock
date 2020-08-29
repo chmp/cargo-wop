@@ -7,6 +7,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b602bfe940d21c130f3895acd65221e8a61270debe89d628b9cb4e3ccb8569b"
 
 [[package]]
+name = "autocfg"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cdb031dd78e28731d87d56cc8ffef4a8f36ca26c38fe2de700543e627f8a464a"
+
+[[package]]
 name = "cargo-wop"
 version = "0.1.4"
 dependencies = [
@@ -14,6 +20,25 @@ dependencies = [
  "serde_json",
  "sha1",
  "toml",
+]
+
+[[package]]
+name = "hashbrown"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e91b62f79061a0bc2e046024cb7ba44b08419ed238ecbd9adbd787434b9e8c25"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
+name = "indexmap"
+version = "1.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86b45e59b16c76b11bf9738fd5d38879d3bd28ad292d7b313608becb17ae2df9"
+dependencies = [
+ "autocfg",
+ "hashbrown",
 ]
 
 [[package]]
@@ -57,5 +82,6 @@ version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ffc92d160b1eef40665be3a05630d003936a3bc7da7421277846c2613e92c71a"
 dependencies = [
+ "indexmap",
  "serde",
 ]
