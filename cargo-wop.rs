@@ -15,7 +15,7 @@
 //! ```
 //!
 use std::{
-    ffi::{OsStr, OsString},
+    ffi::OsStr,
     fs::{self, File},
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
@@ -27,6 +27,7 @@ use serde_json::{self, Value as JsonValue};
 use sha1::Sha1;
 use toml::{self, Value};
 
+use argparse::{parse_args, Args, CargoCall};
 use execution_env::{ExecutionEnv, StdExecutionEnv};
 
 fn main() -> Result<()> {
@@ -41,54 +42,180 @@ fn main_impl() -> Result<i32> {
     Ok(res)
 }
 
-/// Parse the command line arguments
-///
-fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Args> {
-    let args = args.collect::<Vec<_>>();
-    ensure!(
-        args.len() >= 2,
-        "Need at least two  arguments: <wop [source-file]> or <wop [command] [source-file]>"
-    );
-    ensure!(args[0] == "wop", "First argument must be wop");
+mod argparse {
+    use anyhow::{bail, ensure, Result};
+    use std::{
+        ffi::{OsStr, OsString},
+        path::{Path, PathBuf},
+    };
 
-    let (command, target, rest_args) = if has_extension(args[1].as_os_str()) {
-        (String::from("run"), PathBuf::from(&args[1]), &args[2..])
-    } else {
+    use super::util::to_utf8_string;
+
+    /// Parse the command line arguments
+    ///
+    pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Args> {
+        let args = args.collect::<Vec<_>>();
         ensure!(
-            args.len() >= 3,
-            "Need at least three arguments: <wop [command] [source-file]>"
+            args.len() >= 2,
+            "Need at least two  arguments: <wop [source-file]> or <wop [command] [source-file]>"
         );
-        (
-            to_utf8_string(&args[1])?,
-            PathBuf::from(&args[2]),
-            &args[3..],
-        )
-    };
+        ensure!(args[0] == "wop", "First argument must be wop");
 
-    let result = match command.as_str() {
-        "manifest" => {
+        let (command, target, rest_args) = if has_extension(args[1].as_os_str()) {
+            (String::from("run"), PathBuf::from(&args[1]), &args[2..])
+        } else {
             ensure!(
-                rest_args.is_empty(),
-                "The manifest command does not take additional arguments"
+                args.len() >= 3,
+                "Need at least three arguments: <wop [command] [source-file]>"
             );
-            Args::Manifest(target)
+            (
+                to_utf8_string(&args[1])?,
+                PathBuf::from(&args[2]),
+                &args[3..],
+            )
+        };
+
+        let result = match command.as_str() {
+            "manifest" => {
+                ensure!(
+                    rest_args.is_empty(),
+                    "The manifest command does not take additional arguments"
+                );
+                Args::Manifest(target)
+            }
+            "exec" => {
+                ensure!(!rest_args.is_empty(), "Need at least an argument");
+                let exec = Exec {
+                    target,
+                    command: rest_args[0].clone(),
+                    args: rest_args[1..].to_vec(),
+                };
+                Args::Exec(exec)
+            }
+            _ if is_cargo_command(&command) => CargoCall::new(command, target)
+                .with_args(rest_args)
+                .normalize()?
+                .into_args(),
+            _ => bail!("Unknown command: {}", command),
+        };
+        Ok(result)
+    }
+
+    #[derive(Debug, PartialEq)]
+    pub enum Args {
+        /// Execute a direct cargo command
+        GenericCargoCall(CargoCall),
+        /// A build step
+        ///
+        /// It can safely be executed a second time with `--message-format json` to
+        /// get the build artifacts
+        BuildCargoCall(CargoCall),
+        /// A install step that gets passed the manifest dir not the file
+        InstallCargoCall(CargoCall),
+        /// Print out the manifest
+        Manifest(PathBuf),
+        /// Execute a command inside the manifest dir
+        Exec(Exec),
+    }
+
+    #[derive(Debug, PartialEq)]
+    pub struct CargoCall {
+        pub command: String,
+        pub target: PathBuf,
+        pub args: Vec<OsString>,
+    }
+
+    #[derive(Debug, PartialEq)]
+    pub struct Exec {
+        pub command: OsString,
+        pub target: PathBuf,
+        pub args: Vec<OsString>,
+    }
+
+    impl CargoCall {
+        pub fn new<Command, Target>(command: Command, target: Target) -> Self
+        where
+            Command: Into<String>,
+            Target: Into<PathBuf>,
+        {
+            Self {
+                command: command.into(),
+                target: target.into(),
+                args: Vec::new(),
+            }
         }
-        "exec" => {
-            ensure!(!rest_args.is_empty(), "Need at least an argument");
-            let exec = Exec {
-                target: target,
-                command: rest_args[0].clone(),
-                args: rest_args[1..].to_vec(),
+
+        pub fn with_args<Args, Arg>(mut self, args: Args) -> Self
+        where
+            Args: IntoIterator<Item = Arg>,
+            Arg: Into<OsString>,
+        {
+            self.args.extend(args.into_iter().map(|arg| arg.into()));
+            self
+        }
+
+        /// Normalize the arguments
+        fn normalize(mut self) -> Result<Self> {
+            let (cargo_args, commands_args) = self.split_args();
+
+            let mut cargo_args = cargo_args.to_owned();
+            if let "build" | "run" = self.command.as_str() {
+                cargo_args.push(OsString::from("--release"));
+            }
+
+            self.args = if commands_args.is_empty() {
+                cargo_args
+            } else {
+                let mut new_args = cargo_args;
+                new_args.push(OsString::from("--"));
+                new_args.extend(commands_args.iter().cloned());
+                new_args
             };
-            Args::Exec(exec)
+
+            self.command = match self.command.as_str() {
+                "build-debug" => String::from("build"),
+                "run-debug" => String::from("run"),
+                _ => self.command,
+            };
+
+            Ok(self)
         }
-        _ if is_cargo_command(&command) => CargoCall::new(command, target)
-            .with_args(rest_args)
-            .normalize()?
-            .into_args(),
-        _ => bail!("Unknown command: {}", command),
-    };
-    Ok(result)
+
+        /// split the arguments into (cargo, command args)
+        fn split_args(&self) -> (&[OsString], &[OsString]) {
+            if self.command != "run" {
+                (self.args.as_slice(), &[])
+            } else {
+                let splitter = self.args.iter().position(|s| s == "--");
+                if let Some(splitter) = splitter {
+                    (&self.args[..splitter], &self.args[(splitter + 1)..])
+                } else {
+                    (&[], self.args.as_slice())
+                }
+            }
+        }
+
+        pub fn into_args(self) -> Args {
+            match self.command.as_str() {
+                "build" => Args::BuildCargoCall(self),
+                "install" => Args::InstallCargoCall(self),
+                _ => Args::GenericCargoCall(self),
+            }
+        }
+    }
+
+    fn has_extension(s: &OsStr) -> bool {
+        AsRef::<Path>::as_ref(s).extension().is_some()
+    }
+
+    fn is_cargo_command(command: &str) -> bool {
+        match command {
+            "bench" | "build" | "build-debug" | "check" | "clean" | "clippy" | "install"
+            | "locate-project" | "metadata" | "pkgid" | "run" | "run-debug" | "tree" | "test"
+            | "verify-project" => true,
+            _ => false,
+        }
+    }
 }
 
 fn to_utf8_string(s: &OsStr) -> Result<String> {
@@ -99,29 +226,16 @@ fn to_utf8_string(s: &OsStr) -> Result<String> {
     Ok(result)
 }
 
-fn has_extension(s: &OsStr) -> bool {
-    AsRef::<Path>::as_ref(s).extension().is_some()
-}
-
-fn is_cargo_command(command: &str) -> bool {
-    match command {
-        "bench" | "build" | "build-debug" | "check" | "clean" | "clippy" | "install"
-        | "locate-project" | "metadata" | "pkgid" | "run" | "run-debug" | "tree" | "test"
-        | "verify-project" => true,
-        _ => false,
-    }
-}
-
 fn execute_args(args: Args, env: &impl ExecutionEnv) -> Result<i32> {
     match args {
         Args::GenericCargoCall(call) => {
             let project_info = prepare_manifest_dir(&call.target, env)?;
-            let exit_code = call.execute(&project_info)?;
+            let exit_code = execute_cargo_call(&call, &project_info)?;
             Ok(exit_code)
         }
         Args::BuildCargoCall(call) => {
             let project_info = prepare_manifest_dir(&call.target, env)?;
-            let result = call.execute(&project_info)?;
+            let result = execute_cargo_call(&call, &project_info)?;
             ensure!(
                 result == 0,
                 "Error during build. Cannot copy build artifacts"
@@ -164,6 +278,32 @@ fn execute_args(args: Args, env: &impl ExecutionEnv) -> Result<i32> {
     }
 }
 
+/// Execute a cargo call
+///
+fn execute_cargo_call(call: &CargoCall, project_info: &ProjectInfo) -> Result<i32> {
+    let exit_code = build_cargo_call_with_args::<&str>(call, project_info, &[])
+        .status()?
+        .code()
+        .unwrap_or_default();
+    Ok(exit_code)
+}
+
+fn build_cargo_call_with_args<S: AsRef<OsStr>>(
+    call: &CargoCall,
+    project_info: &ProjectInfo,
+    extra_args: &[S],
+) -> Command {
+    let mut result = Command::new("cargo");
+    result
+        .arg(call.command.as_str())
+        .arg("--manifest-path")
+        .arg(project_info.manifest_path.as_os_str())
+        .args(extra_args)
+        .args(call.args.iter());
+
+    result
+}
+
 /// Prepare the cargo project directory
 ///
 /// This commands writes the manifest and copies the source file. After this
@@ -204,8 +344,7 @@ fn prepare_manifest_dir(target: impl AsRef<Path>, env: &impl ExecutionEnv) -> Re
 /// Execute a cargo call and collect any generated artifacts
 ///
 fn collect_build_artifacts(call: &CargoCall, project_info: &ProjectInfo) -> Result<Vec<String>> {
-    let output = call
-        .build_with_args(&project_info, &["--message-format", "json"])
+    let output = build_cargo_call_with_args(call, project_info, &["--message-format", "json"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()?;
@@ -286,138 +425,6 @@ struct ProjectInfo {
     name: String,
     manifest_path: PathBuf,
     manifest_dir: PathBuf,
-}
-
-#[derive(Debug, PartialEq)]
-enum Args {
-    /// Execute a direct cargo command
-    GenericCargoCall(CargoCall),
-    /// A build step
-    ///
-    /// It can safely be executed a second time with `--message-format json` to
-    /// get the build artifacts
-    BuildCargoCall(CargoCall),
-    /// A install step that gets passed the manifest dir not the file
-    InstallCargoCall(CargoCall),
-    /// Print out the manifest
-    Manifest(PathBuf),
-    /// Execute a command inside the manifest dir
-    Exec(Exec),
-}
-
-#[derive(Debug, PartialEq)]
-struct CargoCall {
-    command: String,
-    target: PathBuf,
-    args: Vec<OsString>,
-}
-
-impl CargoCall {
-    /// Execute a cargo call
-    ///
-    fn execute(&self, project_info: &ProjectInfo) -> Result<i32> {
-        let exit_code = self
-            .build_with_args::<&str>(&project_info, &[])
-            .status()?
-            .code()
-            .unwrap_or_default();
-        Ok(exit_code)
-    }
-
-    fn build_with_args<S: AsRef<OsStr>>(
-        &self,
-        project_info: &ProjectInfo,
-        extra_args: &[S],
-    ) -> Command {
-        let mut result = Command::new("cargo");
-        result
-            .arg(self.command.as_str())
-            .arg("--manifest-path")
-            .arg(project_info.manifest_path.as_os_str())
-            .args(extra_args)
-            .args(self.args.iter());
-
-        result
-    }
-}
-
-#[derive(Debug, PartialEq)]
-struct Exec {
-    command: OsString,
-    target: PathBuf,
-    args: Vec<OsString>,
-}
-
-impl CargoCall {
-    fn new<Command, Target>(command: Command, target: Target) -> Self
-    where
-        Command: Into<String>,
-        Target: Into<PathBuf>,
-    {
-        Self {
-            command: command.into(),
-            target: target.into(),
-            args: Vec::new(),
-        }
-    }
-
-    fn with_args<Args, Arg>(mut self, args: Args) -> Self
-    where
-        Args: IntoIterator<Item = Arg>,
-        Arg: Into<OsString>,
-    {
-        self.args.extend(args.into_iter().map(|arg| arg.into()));
-        self
-    }
-
-    /// Normalize the arguments
-    fn normalize(mut self) -> Result<Self> {
-        let (cargo_args, commands_args) = self.split_args();
-
-        let mut cargo_args = cargo_args.to_owned();
-        if let "build" | "run" = self.command.as_str() {
-            cargo_args.push(OsString::from("--release"));
-        }
-
-        self.args = if commands_args.is_empty() {
-            cargo_args
-        } else {
-            let mut new_args = cargo_args;
-            new_args.push(OsString::from("--"));
-            new_args.extend(commands_args.iter().cloned());
-            new_args
-        };
-
-        self.command = match self.command.as_str() {
-            "build-debug" => String::from("build"),
-            "run-debug" => String::from("run"),
-            _ => self.command,
-        };
-
-        Ok(self)
-    }
-
-    /// split the arguments into (cargo, command args)
-    fn split_args(&self) -> (&[OsString], &[OsString]) {
-        if self.command != "run" {
-            (self.args.as_slice(), &[])
-        } else {
-            let splitter = self.args.iter().position(|s| s == "--");
-            if let Some(splitter) = splitter {
-                (&self.args[..splitter], &self.args[(splitter + 1)..])
-            } else {
-                (&[], self.args.as_slice())
-            }
-        }
-    }
-
-    fn into_args(self) -> Args {
-        match self.command.as_str() {
-            "build" => Args::BuildCargoCall(self),
-            "install" => Args::InstallCargoCall(self),
-            _ => Args::GenericCargoCall(self),
-        }
-    }
 }
 
 /// Find the project directory from the supplied file
@@ -786,6 +793,19 @@ fn parse_manifest(reader: impl Read) -> Result<Value> {
                 Self::Other
             }
         }
+    }
+}
+
+mod util {
+    use anyhow::{anyhow, Result};
+    use std::ffi::OsStr;
+
+    pub fn to_utf8_string(s: &OsStr) -> Result<String> {
+        let result = s
+            .to_str()
+            .ok_or_else(|| anyhow!("Could not get utf8 rep"))?
+            .to_owned();
+        Ok(result)
     }
 }
 
