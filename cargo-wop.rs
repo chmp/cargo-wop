@@ -845,8 +845,9 @@ mod util {
 mod test_parse_args {
     use super::argparse::{Args, CargoCall};
     use anyhow::Result;
-    use std::ffi::OsString;
+    use std::{ffi::OsString, path::PathBuf};
 
+    /// Helper to simplify using parse_args
     fn parse_args(args: &[&str]) -> Result<Args> {
         let mut os_args = Vec::<OsString>::new();
         for arg in args {
@@ -856,6 +857,7 @@ mod test_parse_args {
         super::parse_args(os_args.into_iter())
     }
 
+    /// Test parsing run commands
     #[test]
     fn example_implicit_run() {
         assert_eq!(
@@ -866,16 +868,7 @@ mod test_parse_args {
         );
     }
 
-    #[test]
-    fn example_implicit_run_debug() {
-        assert_eq!(
-            parse_args(&["wop", "example.rs"]).unwrap(),
-            CargoCall::new("run", "example.rs",)
-                .with_args(&["--release"])
-                .into_args()
-        );
-    }
-
+    /// Test parsing run-debug commands
     #[test]
     fn example_run_debug() {
         assert_eq!(
@@ -884,6 +877,7 @@ mod test_parse_args {
         );
     }
 
+    /// Test parsing build commands
     #[test]
     fn example2() {
         let actual = parse_args(&["wop", "build", "example.rs"]).unwrap();
@@ -892,6 +886,45 @@ mod test_parse_args {
             .into_args();
 
         assert_eq!(actual, expected);
+    }
+
+    /// Test parsing run commands with additional arguments for cargo
+    #[test]
+    fn cargo_args() {
+        let actual = parse_args(&["wop", "run", "example.rs", "--verbose", "--", "arg"]).unwrap();
+        let expected = CargoCall::new("run", "example.rs")
+            .with_args(&["--verbose", "--release", "--", "arg"])
+            .into_args();
+
+        assert_eq!(actual, expected);
+    }
+
+    /// Test parsing run-debug commands with additional arguments for cargo
+    #[test]
+    fn cargo_args_debug() {
+        let actual =
+            parse_args(&["wop", "run-debug", "example.rs", "--verbose", "--", "arg"]).unwrap();
+        let expected = CargoCall::new("run", "example.rs")
+            .with_args(&["--verbose", "--", "arg"])
+            .into_args();
+
+        assert_eq!(actual, expected);
+    }
+
+    /// Test parsing manifest commands
+    #[test]
+    fn manifest_example() {
+        let actual = parse_args(&["wop", "manifest", "example.rs"]).unwrap();
+        let expected = Args::Manifest(PathBuf::from("example.rs"));
+
+        assert_eq!(actual, expected);
+    }
+
+    /// Test that manifest commands with more than one argument are rejected
+    #[test]
+    fn manifest_example_error() {
+        let actual = parse_args(&["wop", "manifest", "example.rs", "second-arg"]);
+        assert!(actual.is_err());
     }
 }
 
