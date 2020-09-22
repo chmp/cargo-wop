@@ -19,7 +19,24 @@ fn main() -> Result<()> {
     match task {
         Task::Precommit => {
             run(&["cargo", "fmt"])?;
-            run(&["cargo", "test"])?;
+            run(&["cargo", "install", "--path", "."])?;
+            // use cargo-wop to execute cargo-wop to test / write the manifest
+            run(&[
+                "cargo",
+                "wop",
+                "cargo-wop.rs",
+                "wop",
+                "test",
+                "cargo-wop.rs",
+            ])?;
+            run(&[
+                "cargo",
+                "wop",
+                "cargo-wop.rs",
+                "wop",
+                "write-manifest",
+                "cargo-wop.rs",
+            ])?;
         }
     }
     Ok(())
