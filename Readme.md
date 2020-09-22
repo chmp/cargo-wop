@@ -6,9 +6,9 @@ Rust source files as self-contained projects. `cargo-wop` allows to `cargo` work
 with rust source file as if thy were full projects.   This project is heavily
 inspired by [cargo-script][cargo-script], [cargo-eval][cargo-eval]. In contrast
 to these projects, `cargo-wop` is designed to be as close as possible to cargo
-and support all sensible arguments. 
+and support all sensible arguments.
 
-Run a file as a script: 
+Run a file as a script:
 
 ```bash
 cargo wop my-script.rs
@@ -17,7 +17,7 @@ cargo wop my-script.rs
 cargo wop run my-script.rs
 ```
 
-Build artifacts defined in the script: 
+Build artifacts defined in the script:
 
 ```
 cargo wop build my-script.rs
@@ -73,7 +73,7 @@ be recognized. For example:
 //! [dependencies]
 //! serde = "1.0"
 //! ```
-//! 
+//!
 ```
 
 The embedded manifest can contain any keys recognized by cargo. `cargo-wop`
@@ -93,7 +93,7 @@ a static C library:
 //! ```cargo
 //! [lib]
 //! crate-type = ["cdylib"]
-//! 
+//!
 //! [dependencies]
 //! ```
 ```
@@ -103,6 +103,18 @@ This script can be built into a library via:
 ```bash
 cargo wop build my-script.rs
 ```
+
+# Development tasks
+
+Common tasks are bundled in the `make.rs` script. It can be used with
+`cargo-wop` itself. First install `cargo-wop`. Then run the `make.rs` script:
+
+```bash
+cargo install --path .
+cargo wop make.rs precommit
+```
+
+Run `cargo wop make.rs help` to a see a list of available commands.
 
 # Related projects
 

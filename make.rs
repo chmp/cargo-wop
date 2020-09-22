@@ -1,7 +1,7 @@
 //! Helper script to orchestrate build tasks
 //!
 //! Note this script requires cargo-wop to run. First install the cargo wop
-//! package itself. The run this script as `cargo wop make.rs`
+//! package itself. Then run this script as `cargo wop make.rs`
 //!
 //! ```cargo
 //! [dependencies]
@@ -58,6 +58,8 @@ fn delete_file<P: AsRef<Path>>(path: P) -> Result<()> {
 
 #[derive(Clap, Debug)]
 enum Task {
+    /// Run common tasks before committing.
     Precommit,
+    /// Clean the project directory, removing any build files.
     Clean,
 }
