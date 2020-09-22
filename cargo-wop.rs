@@ -3,15 +3,24 @@
 //! ```cargo
 //! [package]
 //! name = "cargo-wop"
+//! version = "0.1.4"
+//! authors = ["Christopher Prohm"]
+//! edition = "2018"
+//!
+//! repository = "https://github.com/chmp/cargo-wop"
+//! description = "Cargo for single-file projects"
+//! readme = "Readme.md"
+//! license = "MIT"
+//!
+//! [[bin]]
+//! name = "cargo-wop"
+//! path = "cargo-wop.rs"
 //!
 //! [dependencies]
 //! anyhow = "1.0"
 //! serde_json = "1.0"
 //! sha1 = "0.6.0"
-//! toml = "0.5"
-//!
-//! [[bin]]
-//! name = "cargo-wop"
+//! toml = { version = "0.5", features = ["preserve_order"] }
 //! ```
 //!
 use anyhow::Result;
@@ -66,6 +75,14 @@ mod argparse {
                 let target = PathBuf::from(&rest_args[0]);
                 Args::Manifest(target)
             }
+            "write-manifest" => {
+                ensure!(
+                    rest_args.len() == 1,
+                    "The manifest command expects the target source file as a single argument",
+                );
+                let target = PathBuf::from(&rest_args[0]);
+                Args::WriteManifest(target)
+            }
             "exec" => {
                 let target = rest_args
                     .get(0)
@@ -116,10 +133,21 @@ mod argparse {
         InstallCargoCall(CargoCall),
         /// Print out the manifest
         Manifest(PathBuf),
+        /// Write the manifest to the current directory
+        WriteManifest(PathBuf),
         /// Execute a command inside the manifest dir
         Exec(Exec),
         /// Show usage info and general help
         Help,
+    }
+
+    impl Args {
+        pub fn is_write_manifest(&self) -> bool {
+            match self {
+                Args::WriteManifest(_) => true,
+                _ => false,
+            }
+        }
     }
 
     #[derive(Debug, PartialEq)]
@@ -276,7 +304,7 @@ In addition the following extra commands are supported:
 "##;
 
     pub fn execute_args(args: Args, env: &impl ExecutionEnv) -> Result<i32> {
-        match args {
+        match &args {
             Args::GenericCargoCall(call) => {
                 let project_info = prepare_manifest_dir(&call.target, env)?;
                 let exit_code = execute_cargo_call(&call, &project_info)?;
@@ -305,14 +333,23 @@ In addition the following extra commands are supported:
                 let exit_code = command.status()?.code().unwrap_or_default();
                 Ok(exit_code)
             }
-            Args::Manifest(target) => {
+            Args::Manifest(target) | Args::WriteManifest(target) => {
                 // TODO: remove the duplication of file + parse + normalize?
                 let file =
                     File::open(target.as_path()).context("Error while opening manifest path")?;
                 let manifest = parse_manifest(file).context("Error while parsing manifest path")?;
                 let manifest = normalize_manifest(manifest, target.as_path(), env)
                     .context("Error during normalizing manifest")?;
-                print!("{}", toml::to_string(&manifest)?);
+
+                if args.is_write_manifest() {
+                    use std::io::Write;
+
+                    let mut file = File::create("Cargo.toml")?;
+                    write!(file, "{}", toml::to_string(&manifest)?)?;
+                } else {
+                    print!("{}", toml::to_string(&manifest)?);
+                }
+
                 Ok(0)
             }
             Args::Exec(exec) => {

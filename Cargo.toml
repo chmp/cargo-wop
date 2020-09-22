@@ -1,20 +1,22 @@
+[[bin]]
+name = "cargo-wop"
+path = "cargo-wop.rs"
+
 [package]
 name = "cargo-wop"
 version = "0.1.4"
 authors = ["Christopher Prohm"]
 edition = "2018"
-
 repository = "https://github.com/chmp/cargo-wop"
 description = "Cargo for single-file projects"
 readme = "Readme.md"
 license = "MIT"
 
-[[bin]]
-name = "cargo-wop"
-path = "cargo-wop.rs"
-
 [dependencies]
 anyhow = "1.0"
 serde_json = "1.0"
 sha1 = "0.6.0"
-toml = { version = "0.5", features = ["preserve_order"] }
+
+[dependencies.toml]
+version = "0.5"
+features = ["preserve_order"]
