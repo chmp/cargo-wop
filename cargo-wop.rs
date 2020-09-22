@@ -33,7 +33,7 @@ fn main_impl() -> Result<i32> {
 }
 
 mod argparse {
-    use anyhow::{bail, ensure, Result};
+    use anyhow::{anyhow, bail, ensure, Result};
     use std::{
         ffi::{OsStr, OsString},
         path::{Path, PathBuf},
@@ -51,29 +51,27 @@ mod argparse {
         );
         ensure!(args[0] == "wop", "First argument must be wop");
 
-        let (command, target, rest_args) = if has_extension(args[1].as_os_str()) {
-            (String::from("run"), PathBuf::from(&args[1]), &args[2..])
+        let (command, rest_args) = if has_extension(args[1].as_os_str()) {
+            (String::from("run"), &args[1..])
         } else {
-            ensure!(
-                args.len() >= 3,
-                "Need at least three arguments: <wop [command] [source-file]>"
-            );
-            (
-                to_utf8_string(&args[1])?,
-                PathBuf::from(&args[2]),
-                &args[3..],
-            )
+            (to_utf8_string(&args[1])?, &args[2..])
         };
 
         let result = match command.as_str() {
             "manifest" => {
                 ensure!(
-                    rest_args.is_empty(),
-                    "The manifest command does not take additional arguments"
+                    rest_args.len() == 1,
+                    "The manifest command expects the target source file as a single argument",
                 );
+                let target = PathBuf::from(&rest_args[0]);
                 Args::Manifest(target)
             }
             "exec" => {
+                let target = rest_args
+                    .get(0)
+                    .ok_or_else(|| anyhow!("Exec requires target source file"))?;
+                let target = PathBuf::from(target);
+
                 ensure!(!rest_args.is_empty(), "Need at least an argument");
                 let exec = Exec {
                     target,
@@ -82,10 +80,24 @@ mod argparse {
                 };
                 Args::Exec(exec)
             }
-            _ if is_cargo_command(&command) => CargoCall::new(command, target)
-                .with_args(rest_args)
-                .normalize()?
-                .into_args(),
+            "help" => {
+                ensure!(
+                    rest_args.is_empty(),
+                    "The help command does not understand extra arguments"
+                );
+                Args::Help
+            }
+            _ if is_cargo_command(&command) => {
+                let target = rest_args
+                    .get(0)
+                    .ok_or_else(|| anyhow!("Cargo commands require a target source file"))?;
+                let rest_args = &rest_args[1..];
+
+                CargoCall::new(command, target)
+                    .with_args(rest_args)
+                    .normalize()?
+                    .into_args()
+            }
             _ => bail!("Unknown command: {}", command),
         };
         Ok(result)
@@ -106,6 +118,8 @@ mod argparse {
         Manifest(PathBuf),
         /// Execute a command inside the manifest dir
         Exec(Exec),
+        /// Show usage info and general help
+        Help,
     }
 
     #[derive(Debug, PartialEq)]
@@ -230,6 +244,37 @@ mod execution {
         util::to_utf8_string,
     };
 
+    const HELP_TEXT: &str = r##"cargo wop -- cargo without project
+
+Run the rust source file as a script:
+
+    cargo wop SOURCE.rs
+    cargo wop run SOURCE.rs
+    cargo wop run SOURCE.rs [SCRIPT ARGUMENTS ...]
+    cargo wop run SOURCE.rs [CARGO ARGUMENTS ...] -- [SCRIPT ARGUMENTS ...]
+
+Build the included targets, executables or libraries:
+
+    cargo wop build SOURCE.rs [CARGO ARGUMENTS ...]
+
+Per default run and build use release builds. Use the run-debug / build-debug
+commands for debug builds.
+
+cargo wop supports the following cargo commands:
+
+    bench check clean clippy install locate-project metadata pkgid tree test
+    verify-project
+
+They can be executed as
+
+    cargo wop COMMAND SOURCE.rs [CARGO ARGUMENTS ...]
+
+In addition the following extra commands are supported:
+
+    cargo wop manifest SOURCE.rs  - Show the generated manifest file
+    cargo wop help                - Show this help text
+"##;
+
     pub fn execute_args(args: Args, env: &impl ExecutionEnv) -> Result<i32> {
         match args {
             Args::GenericCargoCall(call) => {
@@ -279,6 +324,10 @@ mod execution {
 
                 let exit_code = command.status()?.code().unwrap_or_default();
                 Ok(exit_code)
+            }
+            Args::Help => {
+                println!("{}", HELP_TEXT);
+                Ok(0)
             }
         }
     }
