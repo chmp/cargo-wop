@@ -795,6 +795,7 @@ mod manifest_normalization {
                         .as_str()
                         .ok_or_else(|| anyhow!("Invalid manifest: non string path"))?;
                     let path = env.normalize(project_source_path.join(path))?;
+
                     let path = path
                         .to_str()
                         .ok_or_else(|| anyhow!("Cannot interpret dependency path a string"))?;
