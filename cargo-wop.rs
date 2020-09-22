@@ -83,20 +83,6 @@ mod argparse {
                 let target = PathBuf::from(&rest_args[0]);
                 Args::WriteManifest(target)
             }
-            "exec" => {
-                let target = rest_args
-                    .get(0)
-                    .ok_or_else(|| anyhow!("Exec requires target source file"))?;
-                let target = PathBuf::from(target);
-
-                ensure!(!rest_args.is_empty(), "Need at least an argument");
-                let exec = Exec {
-                    target,
-                    command: rest_args[0].clone(),
-                    args: rest_args[1..].to_vec(),
-                };
-                Args::Exec(exec)
-            }
             "help" => {
                 ensure!(
                     rest_args.is_empty(),
@@ -135,8 +121,6 @@ mod argparse {
         Manifest(PathBuf),
         /// Write the manifest to the current directory
         WriteManifest(PathBuf),
-        /// Execute a command inside the manifest dir
-        Exec(Exec),
         /// Show usage info and general help
         Help,
     }
@@ -353,16 +337,6 @@ In addition the following extra commands are supported:
                 }
 
                 Ok(0)
-            }
-            Args::Exec(exec) => {
-                let project_info = prepare_manifest_dir(exec.target.as_path(), env)?;
-                let mut command = Command::new(&exec.command);
-                command
-                    .args(exec.args.iter().cloned())
-                    .current_dir(&project_info.manifest_dir.canonicalize()?);
-
-                let exit_code = command.status()?.code().unwrap_or_default();
-                Ok(exit_code)
             }
             Args::Help => {
                 println!("{}", HELP_TEXT);
