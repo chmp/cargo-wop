@@ -8,7 +8,7 @@
 //! anyhow = "1.0"
 //! clap = "3.0.0-beta.2"
 //! ```
-use std::{ffi::OsStr, fmt::Debug, process::Command};
+use std::{ffi::OsStr, fmt::Debug, fs, path::Path, process::Command};
 
 use anyhow::{ensure, Result};
 use clap::Clap;
@@ -19,24 +19,20 @@ fn main() -> Result<()> {
     match task {
         Task::Precommit => {
             run(&["cargo", "fmt"])?;
-            run(&["cargo", "install", "--path", "."])?;
+            run(&["cargo", "wop", "build", "cargo-wop.rs"])?;
             // use cargo-wop to execute cargo-wop to test / write the manifest
-            run(&[
-                "cargo",
-                "wop",
-                "cargo-wop.rs",
-                "wop",
-                "test",
-                "cargo-wop.rs",
-            ])?;
-            run(&[
-                "cargo",
-                "wop",
-                "cargo-wop.rs",
-                "wop",
-                "write-manifest",
-                "cargo-wop.rs",
-            ])?;
+            //
+            // NOTE: use build instead of install, since install does not work
+            // on windows as we cannot overwrite the cargo-wop executable as it
+            // is running
+            run(&["./cargo-wop", "wop", "test", "cargo-wop.rs"])?;
+            run(&["./cargo-wop", "wop", "write-manifest", "cargo-wop.rs"])?;
+        }
+        Task::Clean => {
+            run(&["cargo", "clean"])?;
+            delete_file("./cargo-wop")?;
+            delete_file("./cargo-wop.exe")?;
+            delete_file("./cargo_wop.pdb")?;
         }
     }
     Ok(())
@@ -51,7 +47,16 @@ fn run<S: AsRef<OsStr> + Debug>(args: &[S]) -> Result<()> {
     Ok(())
 }
 
+fn delete_file<P: AsRef<Path>>(path: P) -> Result<()> {
+    let path = path.as_ref();
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
 #[derive(Clap, Debug)]
 enum Task {
     Precommit,
+    Clean,
 }

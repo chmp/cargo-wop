@@ -1,1 +1,6 @@
 /target
+
+# build artifacts
+/cargo-wop
+/cargo-wop.exe
+/cargo_wop.pdb
