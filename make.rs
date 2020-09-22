@@ -18,6 +18,7 @@ fn main() -> Result<()> {
 
     match task {
         Task::Precommit => {
+            run(&["rustfmt", "make.rs"])?;
             run(&["cargo", "fmt"])?;
             run(&["cargo", "wop", "build", "cargo-wop.rs"])?;
             // use cargo-wop to execute cargo-wop to test / write the manifest
