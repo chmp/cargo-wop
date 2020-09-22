@@ -299,8 +299,10 @@ They can be executed as
 
 In addition the following extra commands are supported:
 
-    cargo wop manifest SOURCE.rs  - Show the generated manifest file
-    cargo wop help                - Show this help text
+    cargo wop manifest SOURCE.rs        - Show the generated manifest file
+    cargo wop write-manifest SOURCE.rs  - Write the generated manifest to the
+                                          current directory as Cargo.toml
+    cargo wop help                      - Show this help text
 "##;
 
     pub fn execute_args(args: Args, env: &impl ExecutionEnv) -> Result<i32> {
