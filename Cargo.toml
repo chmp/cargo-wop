@@ -1,6 +1,6 @@
 [[bin]]
 name = "cargo-wop"
-path = "cargo-wop.rs"
+path = "/mnt/c/Users/cmp/Documents/Code/SideProjects/cargo-wop/cargo-wop.rs"
 
 [package]
 name = "cargo-wop"

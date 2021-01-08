@@ -274,8 +274,8 @@ commands for debug builds.
 
 cargo wop supports the following cargo commands:
 
-    bench check clean clippy install locate-project metadata pkgid tree test
-    verify-project
+    bench check clean clippy fmt install locate-project metadata pkgid tree 
+    test verify-project
 
 They can be executed as
 
