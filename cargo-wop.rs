@@ -384,11 +384,6 @@ In addition the following extra commands are supported:
         let manifest_dir = find_project_dir(target, env)?;
         let manifest_path = manifest_dir.join("Cargo.toml");
 
-        let source_path = target
-            .file_name()
-            .ok_or_else(|| anyhow!("Cannot handle directory source"))?;
-        let source_path = manifest_dir.join(source_path);
-
         // TODO: get the name from the normalized manifest in case the user has overwritten it
         let name = to_utf8_string(
             target
@@ -402,7 +397,6 @@ In addition the following extra commands are supported:
         // perform any faillible operations
         fs::create_dir_all(&manifest_dir)?;
         fs::write(&manifest_path, toml::to_string(&manifest)?)?;
-        fs::copy(target, source_path)?;
 
         return Ok(ProjectInfo {
             manifest_path,
@@ -635,7 +629,12 @@ mod manifest_normalization {
             .parent()
             .ok_or_else(|| anyhow!("Cannot get parent of target path"))?
             .to_owned();
-        let (local_target_path, target_name) = get_path_info(target_path)?;
+
+        let target_name = to_utf8_string(
+            target_path
+                .file_stem()
+                .ok_or_else(|| anyhow!("Cannot build manifest for non file target"))?,
+        )?;
 
         let root = manifest
             .as_table_mut()
@@ -644,31 +643,12 @@ mod manifest_normalization {
         ensure_valid_package(root, &target_name).context("Error while modifying package")?;
         ensure_at_least_a_single_target(root).context("Error while ensuring a valid target")?;
 
-        patch_all_targets(root, &local_target_path, &target_name)
+        patch_all_targets(root, target_path, &target_name, env)
             .context("Error while patching the targets")?;
         patch_all_dependencies(root, &target_directory, env)
             .context("Error while patching the dependencies")?;
 
         Ok(manifest)
-    }
-
-    /// Helper for normalize_manifest: Get the file name and stem from a path
-    ///
-    fn get_path_info(path: impl AsRef<Path>) -> Result<(String, String)> {
-        let path = path.as_ref();
-
-        let target_name = to_utf8_string(
-            path.file_stem()
-                .ok_or_else(|| anyhow!("Cannot build manifest for non file target"))?,
-        )?;
-        let target_path = path
-            .file_name()
-            .ok_or_else(|| anyhow!("Cannot build manifest for non file target"))?
-            .to_str()
-            .ok_or_else(|| anyhow!("Cannot build manifest for paths not-expressible in utf-8"))?
-            .to_owned();
-
-        Ok((target_path, target_name))
     }
 
     /// Helper for normalize_manifest: Ensure the package table is correctly filled
@@ -729,11 +709,12 @@ mod manifest_normalization {
     /// Patch all available target definition
     fn patch_all_targets(
         root: &mut toml::map::Map<String, Value>,
-        path: &str,
+        path: &Path,
         name: &str,
+        env: &impl ExecutionEnv,
     ) -> Result<()> {
         if let Some(lib) = root.get_mut("lib") {
-            patch_target(lib, &path, &name)?;
+            patch_target(lib, path, &name, env)?;
         }
 
         if let Some(bins) = root.get_mut("bin") {
@@ -742,7 +723,7 @@ mod manifest_normalization {
                 .ok_or_else(|| anyhow!("Invalid manifest: bin not an array"))?;
 
             for bin in bins {
-                patch_target(bin, &path, &name)?;
+                patch_target(bin, path, &name, env)?;
             }
         }
 
@@ -750,7 +731,18 @@ mod manifest_normalization {
     }
 
     /// Helper for normalize manifest: patch the target definition to use the correct file path
-    fn patch_target(target: &mut Value, path: &str, name: &str) -> Result<()> {
+    fn patch_target(
+        target: &mut Value,
+        path: &Path,
+        name: &str,
+        env: &impl ExecutionEnv,
+    ) -> Result<()> {
+        let path = env.normalize(path)?;
+        let path = path
+            .to_str()
+            .ok_or_else(|| anyhow!("Cannot interpret path as UTF-8 string"))?
+            .to_owned();
+
         let bin = target
             .as_table_mut()
             .ok_or_else(|| anyhow!("Cannot patch non table target"))?;
