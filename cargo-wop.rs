@@ -226,9 +226,9 @@ mod argparse {
 
     fn is_cargo_command(command: &str) -> bool {
         match command {
-            "bench" | "build" | "build-debug" | "check" | "clean" | "clippy" | "install"
-            | "locate-project" | "metadata" | "pkgid" | "run" | "run-debug" | "tree" | "test"
-            | "verify-project" => true,
+            "bench" | "build" | "build-debug" | "check" | "clean" | "clippy" | "fmt"
+            | "install" | "locate-project" | "metadata" | "pkgid" | "run" | "run-debug"
+            | "tree" | "test" | "verify-project" => true,
             _ => false,
         }
     }
