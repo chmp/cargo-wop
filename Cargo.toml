@@ -1,10 +1,10 @@
 [[bin]]
 name = "cargo-wop"
-path = "/mnt/c/Users/cmp/Documents/Code/SideProjects/cargo-wop/cargo-wop.rs"
+path = "cargo-wop.rs"
 
 [package]
 name = "cargo-wop"
-version = "0.1.4"
+version = "0.1.5"
 authors = ["Christopher Prohm"]
 edition = "2018"
 repository = "https://github.com/chmp/cargo-wop"
