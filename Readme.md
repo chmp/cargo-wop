@@ -33,7 +33,7 @@ cargo wop test my-script.rs
 At the moment the following cargo commands are supported: `bench`, `build`,
 `check`, `clean`, `clippy`, `fmt`, `install`, `locate-project`, `metadata`,
 `pkgid`, `run`, `tree`, `test`, `verify-project`. For most commands `cargo-wop`
-rewrites the command-line as follows:
+rewrites the command line as follows:
 
 ```bash
 # Original command-line
@@ -45,6 +45,9 @@ cargo [cargo-command] --manifest-path [generated_manifest] [args...]
 
 Some commands use additional rules:
 
+- `new`: create a new source file based on templates. Run `cargo wop new` to get
+  a list of all available templates. Run `cargo wop new template SOURCE.rs` to
+  create the file.
 - `run`: all arguments are passed per default to the script, not to cargo. To
   pass arguments to `cargo` place them before a `--`. For example: `cargo wop
   run my-script.rs --debug -- ...`

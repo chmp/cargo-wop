@@ -28,6 +28,8 @@ fn main() -> Result<()> {
             // is running
             run(&["./cargo-wop", "wop", "test", "cargo-wop.rs"])?;
             run(&["./cargo-wop", "wop", "write-manifest", "cargo-wop.rs"])?;
+            run(&["cargo", "test"])?;
+            run(&["cargo", "build"])?;
         }
         Task::Clean => {
             run(&["cargo", "clean"])?;

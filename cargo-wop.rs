@@ -3,7 +3,7 @@
 //! ```cargo
 //! [package]
 //! name = "cargo-wop"
-//! version = "0.1.4"
+//! version = "0.1.6"
 //! authors = ["Christopher Prohm"]
 //! edition = "2018"
 //!
@@ -83,12 +83,30 @@ mod argparse {
                 let target = PathBuf::from(&rest_args[0]);
                 Args::WriteManifest(target)
             }
-            "help" => {
+            "help" | "--help" => {
                 ensure!(
                     rest_args.is_empty(),
                     "The help command does not understand extra arguments"
                 );
                 Args::Help
+            }
+            "new" => {
+                if rest_args.len() == 0 {
+                    Args::ListTemplates
+                } else if rest_args.len() == 2 {
+                    let template = rest_args[0]
+                        .to_str()
+                        .ok_or_else(|| anyhow!("Cannot convert template to utf8 string"))?
+                        .to_owned();
+                    let target = PathBuf::from(&rest_args[1]);
+                    Args::New(template, target)
+                } else {
+                    bail!(
+                        "Invalid new call: either use 'cargo wop new' to list \
+                        available templates or 'cargo wop new TEMPLATE PATH' \
+                        to create a new file"
+                    );
+                }
             }
             _ if is_cargo_command(&command) => {
                 let target = rest_args
@@ -101,7 +119,10 @@ mod argparse {
                     .normalize()?
                     .into_args()
             }
-            _ => bail!("Unknown command: {}", command),
+            _ => bail!(
+                "Unknown command: {}. Use 'cargo wop' help to show available commands.",
+                command
+            ),
         };
         Ok(result)
     }
@@ -123,6 +144,10 @@ mod argparse {
         WriteManifest(PathBuf),
         /// Show usage info and general help
         Help,
+        /// Show available templates for new
+        ListTemplates,
+        /// Create a new file
+        New(String, PathBuf),
     }
 
     impl Args {
@@ -236,6 +261,7 @@ mod argparse {
 
 mod execution {
     use std::{
+        collections::HashMap,
         ffi::OsStr,
         fs::{self, File},
         io::{BufRead, BufReader},
@@ -243,7 +269,7 @@ mod execution {
         process::{Command, Stdio},
     };
 
-    use anyhow::{anyhow, ensure, Context, Result};
+    use anyhow::{anyhow, bail, ensure, Context, Result};
     use serde_json::Value as JsonValue;
     use sha1::Sha1;
     use toml::Value;
@@ -255,6 +281,16 @@ mod execution {
         manifest_parsing::parse_manifest,
         util::to_utf8_string,
     };
+
+    /// helper marco to simplify early returns with options
+    macro_rules! unwrap_or {
+        ($opt:expr, $or:expr) => {
+            match $opt {
+                Some(value) => value,
+                None => $or,
+            }
+        };
+    }
 
     const HELP_TEXT: &str = r##"cargo wop -- cargo without project
 
@@ -274,7 +310,7 @@ commands for debug builds.
 
 cargo wop supports the following cargo commands:
 
-    bench check clean clippy fmt install locate-project metadata pkgid tree 
+    bench check clean clippy fmt install locate-project metadata pkgid tree
     test verify-project
 
 They can be executed as
@@ -286,7 +322,19 @@ In addition the following extra commands are supported:
     cargo wop manifest SOURCE.rs        - Show the generated manifest file
     cargo wop write-manifest SOURCE.rs  - Write the generated manifest to the
                                           current directory as Cargo.toml
+    cargo wop new                       - List available templates to create
+                                          a new file
+    cargo wop new TEMPLATE SOURCE.rs    - Create the file SOURCE.rs using the
+                                          given template
     cargo wop help                      - Show this help text
+    cargo wop --help
+"##;
+
+    const TEMPLATES_TEXT: &str = r##"The following templates are available:
+
+- "bin": an executable
+- "lib": a library
+- "pymodule": a library using PyO3 that compiles to a Python extension module
 "##;
 
     pub fn execute_args(args: Args, env: &impl ExecutionEnv) -> Result<i32> {
@@ -304,7 +352,7 @@ In addition the following extra commands are supported:
                     "Error during build. Cannot copy build artifacts"
                 );
                 let artifacts = collect_build_artifacts(&call, &project_info)?;
-                copy_build_artifacts(artifacts, std::env::current_dir()?)?;
+                copy_build_artifacts(artifacts, std::env::current_dir()?, &project_info.options)?;
                 Ok(0)
             }
             Args::InstallCargoCall(call) => {
@@ -342,7 +390,57 @@ In addition the following extra commands are supported:
                 println!("{}", HELP_TEXT);
                 Ok(0)
             }
+            Args::ListTemplates => {
+                println!("{}", TEMPLATES_TEXT);
+                Ok(0)
+            }
+            Args::New(template, target) => {
+                use std::io::Write;
+
+                let source = render_new_file(template, target)?;
+
+                ensure!(
+                    !target.exists(),
+                    "Target {} already exists",
+                    target.display()
+                );
+
+                println!("Write {}", target.display());
+                let mut file = File::create(target)?;
+                file.write_all(source.as_bytes())?;
+
+                Ok(0)
+            }
         }
+    }
+
+    /// Create the new file source
+    ///
+    fn render_new_file(template: &str, target: &Path) -> Result<String> {
+        let template = match template {
+            "bin" => super::templates::BIN,
+            "lib" => super::templates::LIB,
+            "pymodule" => super::templates::PYMODULE,
+            _ => bail!("Unknown template '{}'", template),
+        };
+
+        let repl = |key: &str| -> Result<String> {
+            match key {
+                "NAME" => {
+                    let res = target
+                        .file_stem()
+                        .ok_or_else(|| anyhow!("Cannot get file stem"))?
+                        .to_str()
+                        .ok_or_else(|| anyhow!("Cannot get uf8 name"))?
+                        .to_owned();
+                    Ok(res)
+                }
+                _ => bail!("Unknown pattern {}", key),
+            }
+        };
+
+        let source = super::util::format_dynamic(template, repl)?;
+        Ok(source)
     }
 
     /// Execute a cargo call
@@ -392,22 +490,45 @@ In addition the following extra commands are supported:
         )?;
 
         let manifest = parse_manifest_file(target)?;
-        let manifest = normalize_manifest(manifest, target, env)?;
+        let options = parse_custom_section(&manifest)?;
+        let normed_manifest = normalize_manifest(manifest, target, env)?;
 
         // perform any faillible operations
         fs::create_dir_all(&manifest_dir)?;
-        fs::write(&manifest_path, toml::to_string(&manifest)?)?;
+        fs::write(&manifest_path, toml::to_string(&normed_manifest)?)?;
 
         return Ok(ProjectInfo {
             manifest_path,
             manifest_dir,
             name,
+            options,
         });
 
         fn parse_manifest_file(path: impl AsRef<Path>) -> Result<Value> {
             let file = File::open(path)?;
             parse_manifest(file)
         }
+    }
+
+    /// Parse the custom section and retrieve cargo-wop configuration
+    ///
+    fn parse_custom_section(manifest: &Value) -> Result<ProjectOptions> {
+        let mut res = ProjectOptions::default();
+
+        let section = unwrap_or! { manifest.get("cargo-wop"), return Ok(res) };
+
+        if let Some(filter) = section.get("filter") {
+            let filter = unwrap_or! { filter.as_table(), bail!("Filter must be table") };
+            for (src, dst) in filter {
+                let dst = unwrap_or! {
+                    dst.as_str(),
+                    bail!("Invalid destination for source {}, must be a string", src)
+                };
+                res.filter.insert(src.to_owned(), dst.to_owned());
+            }
+        }
+
+        Ok(res)
     }
 
     /// Execute a cargo call and collect any generated artifacts
@@ -475,7 +596,7 @@ In addition the following extra commands are supported:
         Ok(result)
     }
 
-    fn copy_build_artifacts<I, P, T>(from: I, to: T) -> Result<()>
+    fn copy_build_artifacts<I, P, T>(from: I, to: T, options: &ProjectOptions) -> Result<()>
     where
         I: IntoIterator<Item = P>,
         P: AsRef<Path>,
@@ -483,11 +604,23 @@ In addition the following extra commands are supported:
     {
         for src in from {
             let src = src.as_ref();
-            let dst = to.as_ref().join(
-                src.file_name()
-                    .ok_or_else(|| anyhow!("Invalid source filename"))?,
-            );
 
+            let src_file_name = unwrap_or! { src.file_name(), bail!("Invalid source filename") };
+            let dst_file_name = if let Some(src_file_name) = src_file_name.to_str() {
+                if let Some(dst_file_name) = options.filter.get(src_file_name) {
+                    OsStr::new(dst_file_name)
+                } else {
+                    OsStr::new(src_file_name)
+                }
+            } else {
+                src_file_name
+            };
+
+            if dst_file_name.is_empty() {
+                continue;
+            }
+
+            let dst = to.as_ref().join(dst_file_name);
             fs::copy(src, dst)?;
         }
         Ok(())
@@ -497,6 +630,13 @@ In addition the following extra commands are supported:
         name: String,
         manifest_path: PathBuf,
         manifest_dir: PathBuf,
+        options: ProjectOptions,
+    }
+
+    #[derive(Default, Debug)]
+    struct ProjectOptions {
+        /// Rename or skip build artifacts
+        filter: HashMap<String, String>,
     }
 
     /// Find the project directory from the supplied file
@@ -640,6 +780,7 @@ mod manifest_normalization {
             .as_table_mut()
             .ok_or_else(|| anyhow!("Can only handle manifests that are tables"))?;
 
+        strip_custom_section(root);
         ensure_valid_package(root, &target_name).context("Error while modifying package")?;
         ensure_at_least_a_single_target(root).context("Error while ensuring a valid target")?;
 
@@ -649,6 +790,12 @@ mod manifest_normalization {
             .context("Error while patching the dependencies")?;
 
         Ok(manifest)
+    }
+
+    /// Strip the custom section used to configure cargo-wop
+    ///
+    fn strip_custom_section(root: &mut toml::map::Map<String, Value>) {
+        root.remove("cargo-wop");
     }
 
     /// Helper for normalize_manifest: Ensure the package table is correctly filled
@@ -884,7 +1031,7 @@ mod manifest_parsing {
 }
 
 mod util {
-    use anyhow::{anyhow, Result};
+    use anyhow::{anyhow, bail, Result};
     use std::ffi::OsStr;
 
     pub fn to_utf8_string(s: &OsStr) -> Result<String> {
@@ -894,6 +1041,122 @@ mod util {
             .to_owned();
         Ok(result)
     }
+
+    /// A format-like function that uses a function to lookup replacements
+    ///
+    pub fn format_dynamic<F>(template: &str, mut replacement: F) -> Result<String>
+    where
+        F: FnMut(&str) -> Result<String>,
+    {
+        fn find_from(haystack: &str, needle: char, offset: usize) -> Option<usize> {
+            match (&haystack[offset..]).find(needle) {
+                Some(res) => Some(res + offset),
+                None => None,
+            }
+        }
+
+        let mut res = String::new();
+        let mut offset = 0;
+
+        while let Some(start) = find_from(template, '%', offset) {
+            res.push_str(&template[offset..start]);
+
+            let start = start + '%'.len_utf8();
+            let end = match find_from(template, '%', start) {
+                Some(end) => end,
+                None => bail!("Could not find closing '%'"),
+            };
+
+            match &template[start..end] {
+                // escaped %
+                "" => res.push('%'),
+                key => {
+                    let r = replacement(key)?;
+                    res.push_str(&r);
+                }
+            };
+
+            offset = end + '%'.len_utf8();
+        }
+
+        res.push_str(&template[offset..]);
+        Ok(res)
+    }
+}
+
+mod templates {
+    pub const BIN: &str = r##"//! Executable %NAME%
+//!
+//! ```cargo
+//! [dependencies]
+//! # include additional dependencies here
+//! ```
+
+fn main() {
+    println!("Hello world");
+}
+"##;
+
+    pub const LIB: &str = r##"//! Shared library %NAME%
+//!
+//! This library can be built with `cargo wop`:
+//!
+//! ```bash
+//! cargo wop build %NAME%.rs
+//! ```
+//!
+//! ```cargo
+//! [lib]
+//! name = "%NAME%"
+//! crate-type = ["cdylib"]
+//!
+//! [dependencies]
+//! # include additional dependencies here
+//! ```
+
+#[no_mangle]
+pub extern "C" fn add(a: i64, b: i64) -> i64 {
+    a + b
+}
+"##;
+
+    pub const PYMODULE: &str = r##"//! Python extension module %NAME%
+//!
+//! This module can be built with `cargo wop` and imported with Python:
+//!
+//! ```bash
+//! cargo wop build %NAME%.rs
+//! python -c 'import %NAME%
+//! ```
+//!
+//! ```cargo
+//! [lib]
+//! name = "%NAME%"
+//! crate-type = ["cdylib"]
+//!
+//! [dependencies]
+//! pyo3 = { version = "0.13", features = ["extension-module"] }
+//!
+//! [cargo-wop.filter]
+//! "lib%NAME%.so" = "%NAME%.so"
+//! ```
+#![allow(unused)]
+fn main() {
+    use pyo3::prelude::*;
+    use pyo3::wrap_pyfunction;
+
+    #[pyfunction]
+    fn add(a: i64, b: i64) -> PyResult<i64> {
+        Ok(a + b)
+    }
+
+    #[pymodule]
+    fn %NAME%(py: Python, m: &PyModule) -> PyResult<()> {
+        m.add_function(wrap_pyfunction!(add, m)?)?;
+        Ok(())
+    }
+}
+"##;
 }
 
 #[cfg(test)]
@@ -1033,5 +1296,43 @@ mod test_rust_path_handling {
             parent_path("foo/bar/example.rs"),
             Some(PathBuf::from("foo/bar"))
         );
+    }
+}
+
+#[cfg(test)]
+mod test_format_dynamic {
+    use super::util::format_dynamic;
+    use anyhow::Result;
+
+    #[test]
+    fn examples() -> Result<()> {
+        let mut repl = |s: &str| -> Result<String> {
+            match s {
+                "hello" => Ok(String::from("world")),
+                "foo" => Ok(String::from("bar")),
+                _ => Ok(String::from(s)),
+            }
+        };
+
+        assert_eq!(format_dynamic("%foo%", &mut repl)?, String::from("bar"));
+        assert_eq!(
+            format_dynamic("%foo% %hello%", &mut repl)?,
+            String::from("bar world")
+        );
+        assert_eq!(
+            format_dynamic("leading %foo% %hello% trailing", &mut repl)?,
+            String::from("leading bar world trailing")
+        );
+        assert_eq!(
+            format_dynamic(".. %foo% .. %foo% .. %foo% ..", &mut repl)?,
+            String::from(".. bar .. bar .. bar ..")
+        );
+
+        assert_eq!(
+            format_dynamic(".. %%foo%% ..", &mut repl)?,
+            String::from(".. %foo% .."),
+        );
+
+        Ok(())
     }
 }
