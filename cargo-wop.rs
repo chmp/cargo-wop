@@ -1126,7 +1126,7 @@ pub extern "C" fn add(a: i64, b: i64) -> i64 {
 //!
 //! ```bash
 //! cargo wop build %NAME%.rs
-//! python -c 'import %NAME%
+//! python -c 'import %NAME%'
 //! ```
 //!
 //! ```cargo
