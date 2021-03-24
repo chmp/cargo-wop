@@ -35,7 +35,6 @@ fn main() -> Result<()> {
 
 fn main_impl() -> Result<i32> {
     let env = StdExecutionEnv::new()?;
-
     let args = parse_args(std::env::args_os().skip(1))?;
     let res = execute_args(args, &env)?;
     Ok(res)
@@ -60,11 +59,15 @@ mod argparse {
         );
         ensure!(args[0] == "wop", "First argument must be wop");
 
-        let (command, rest_args) = if has_extension(args[1].as_os_str()) {
-            (String::from("run"), &args[1..])
-        } else {
-            (to_utf8_string(&args[1])?, &args[2..])
-        };
+        if has_extension(args[1].as_os_str()) {
+            let res = DefaultAction::new(&args[1])
+                .with_args(args.iter().skip(2))
+                .into_args();
+            return Ok(res);
+        }
+
+        let command = to_utf8_string(&args[1])?;
+        let rest_args = &args[2..];
 
         let result = match command.as_str() {
             "manifest" => {
@@ -129,6 +132,9 @@ mod argparse {
 
     #[derive(Debug, PartialEq)]
     pub enum Args {
+        /// Execute the default action
+        DefaultAction(DefaultAction),
+
         /// Execute a direct cargo command
         GenericCargoCall(CargoCall),
         /// A build step
@@ -156,6 +162,37 @@ mod argparse {
                 Args::WriteManifest(_) => true,
                 _ => false,
             }
+        }
+    }
+
+    #[derive(Debug, PartialEq)]
+    pub struct DefaultAction {
+        pub target: PathBuf,
+        pub args: Vec<OsString>,
+    }
+
+    impl DefaultAction {
+        pub fn new<Target>(target: Target) -> Self
+        where
+            Target: Into<PathBuf>,
+        {
+            DefaultAction {
+                target: target.into(),
+                args: Vec::new(),
+            }
+        }
+
+        pub fn with_args<Args, Arg>(mut self, args: Args) -> Self
+        where
+            Args: IntoIterator<Item = Arg>,
+            Arg: Into<OsString>,
+        {
+            self.args.extend(args.into_iter().map(|arg| arg.into()));
+            self
+        }
+
+        pub fn into_args(self) -> Args {
+            Args::DefaultAction(self)
         }
     }
 
@@ -262,7 +299,7 @@ mod argparse {
 mod execution {
     use std::{
         collections::HashMap,
-        ffi::OsStr,
+        ffi::{OsStr, OsString},
         fs::{self, File},
         io::{BufRead, BufReader},
         path::{Path, PathBuf},
@@ -339,6 +376,32 @@ In addition the following extra commands are supported:
 
     pub fn execute_args(args: Args, env: &impl ExecutionEnv) -> Result<i32> {
         match &args {
+            Args::DefaultAction(call) => {
+                let project_info = prepare_manifest_dir(&call.target, env)?;
+
+                let mut full_args = Vec::new();
+                full_args.push(OsString::from("wop"));
+
+                if let Some(default) = project_info.options.default_action.as_ref() {
+                    full_args.push(OsString::from(&default[0]));
+                    full_args.push(OsString::from(&call.target));
+                    full_args.extend(default.iter().skip(1).map(OsString::from));
+                } else {
+                    full_args.push(OsString::from("run"));
+                    full_args.push(OsString::from(&call.target));
+                };
+                full_args.extend(call.args.iter().cloned());
+
+                // TODO: is there a more elegant solution?
+                println!("Run {:?}", full_args);
+                let args = super::parse_args(full_args.into_iter())?;
+                assert!(
+                    !matches!(args, Args::DefaultAction(_)),
+                    "Recursion detected in default action"
+                );
+
+                return execute_args(args, env);
+            }
             Args::GenericCargoCall(call) => {
                 let project_info = prepare_manifest_dir(&call.target, env)?;
                 let exit_code = execute_cargo_call(&call, &project_info)?;
@@ -528,6 +591,21 @@ In addition the following extra commands are supported:
             }
         }
 
+        if let Some(default_action) = section.get("default-action") {
+            let default_action =
+                unwrap_or! { default_action.as_array(), bail!("Default action must be an array") };
+            let mut converted_action = Vec::new();
+            for item in default_action {
+                let item = unwrap_or! {
+                    item.as_str(),
+                    bail!("Each entry in the default action must be a string")
+                };
+                converted_action.push(item.to_owned());
+            }
+
+            res.default_action = Some(converted_action);
+        }
+
         Ok(res)
     }
 
@@ -637,6 +715,7 @@ In addition the following extra commands are supported:
     struct ProjectOptions {
         /// Rename or skip build artifacts
         filter: HashMap<String, String>,
+        default_action: Option<Vec<String>>,
     }
 
     /// Find the project directory from the supplied file
@@ -1161,7 +1240,7 @@ fn main() {
 
 #[cfg(test)]
 mod test_parse_args {
-    use super::argparse::{Args, CargoCall};
+    use super::argparse::{Args, CargoCall, DefaultAction};
     use anyhow::Result;
     use std::{ffi::OsString, path::PathBuf};
 
@@ -1180,9 +1259,7 @@ mod test_parse_args {
     fn example_implicit_run() {
         assert_eq!(
             parse_args(&["wop", "example.rs"]).unwrap(),
-            CargoCall::new("run", "example.rs")
-                .with_args(&["--release"])
-                .into_args()
+            DefaultAction::new("example.rs").into_args(),
         );
     }
 
@@ -1191,7 +1268,7 @@ mod test_parse_args {
     fn example_run_debug() {
         assert_eq!(
             parse_args(&["wop", "run-debug", "example.rs"]).unwrap(),
-            CargoCall::new("run", "example.rs").into_args()
+            CargoCall::new("run", "example.rs").into_args(),
         );
     }
 
