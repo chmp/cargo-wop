@@ -311,6 +311,8 @@ mod execution {
     use sha1::Sha1;
     use toml::Value;
 
+    use crate::argparse::DefaultAction;
+
     use super::{
         argparse::{Args, CargoCall},
         execution_env::ExecutionEnv,
@@ -378,29 +380,16 @@ In addition the following extra commands are supported:
         match &args {
             Args::DefaultAction(call) => {
                 let project_info = prepare_manifest_dir(&call.target, env)?;
+                let merged_args = merge_default_args(call, &project_info.options.default_action);
 
-                let mut full_args = Vec::new();
-                full_args.push(OsString::from("wop"));
-
-                if let Some(default) = project_info.options.default_action.as_ref() {
-                    full_args.push(OsString::from(&default[0]));
-                    full_args.push(OsString::from(&call.target));
-                    full_args.extend(default.iter().skip(1).map(OsString::from));
-                } else {
-                    full_args.push(OsString::from("run"));
-                    full_args.push(OsString::from(&call.target));
-                };
-                full_args.extend(call.args.iter().cloned());
-
-                // TODO: is there a more elegant solution?
-                println!("Run {:?}", full_args);
-                let args = super::parse_args(full_args.into_iter())?;
+                println!(":: cargo {}", format_default_args(&merged_args));
+                let args = super::parse_args(merged_args.into_iter())?;
                 assert!(
                     !matches!(args, Args::DefaultAction(_)),
                     "Recursion detected in default action"
                 );
 
-                return execute_args(args, env);
+                execute_args(args, env)
             }
             Args::GenericCargoCall(call) => {
                 let project_info = prepare_manifest_dir(&call.target, env)?;
@@ -475,6 +464,35 @@ In addition the following extra commands are supported:
                 Ok(0)
             }
         }
+    }
+
+    fn merge_default_args(
+        call: &DefaultAction,
+        default_action: &Option<Vec<String>>,
+    ) -> Vec<OsString> {
+        let mut full_args = Vec::new();
+        full_args.push(OsString::from("wop"));
+
+        if let Some(default) = default_action.as_ref() {
+            full_args.extend(default.iter().map(OsString::from));
+        } else {
+            full_args.push(OsString::from("run"));
+        };
+        full_args.extend(call.args.iter().cloned());
+        full_args.insert(2, OsString::from(&call.target));
+
+        full_args
+    }
+
+    fn format_default_args(args: &[OsString]) -> String {
+        let mut res = String::new();
+        for (i, arg) in args.iter().enumerate() {
+            if i != 0 {
+                res.push_str(" ");
+            }
+            res.push_str(arg.to_string_lossy().as_ref());
+        }
+        res
     }
 
     /// Create the new file source
@@ -750,6 +768,62 @@ In addition the following extra commands are supported:
         let digest = hash.digest();
         let res = digest.to_string();
         res[..8].to_string()
+    }
+
+    #[cfg(test)]
+    mod test {
+        use super::*;
+
+        // wrapper to simplify test code
+        fn merge_default_args(call: DefaultAction, default_action: Option<&[&str]>) -> Vec<String> {
+            let default_action = default_action.map(to_strings);
+            super::merge_default_args(&call, &default_action)
+                .iter()
+                .map(|s| OsString::into_string(s.clone()).unwrap())
+                .collect()
+        }
+
+        fn to_strings(data: &[&str]) -> Vec<String> {
+            data.iter().map(|s| (*s).to_owned()).collect()
+        }
+
+        #[test]
+        fn test_merge_default_args() {
+            assert_eq!(
+                merge_default_args(DefaultAction::new("foo.rs"), None),
+                to_strings(&["wop", "run", "foo.rs"]),
+            );
+
+            assert_eq!(
+                merge_default_args(
+                    DefaultAction::new("foo.rs").with_args(&["--", "hello", "world"]),
+                    None
+                ),
+                to_strings(&["wop", "run", "foo.rs", "--", "hello", "world"]),
+            );
+
+            assert_eq!(
+                merge_default_args(
+                    DefaultAction::new("foo.rs").with_args(&["test", "--", "hello", "world"]),
+                    Some(&[])
+                ),
+                to_strings(&["wop", "test", "foo.rs", "--", "hello", "world"]),
+            );
+
+            assert_eq!(
+                merge_default_args(
+                    DefaultAction::new("foo.rs"),
+                    Some(&["build", "--target", "wasm32-unknown-unknown"])
+                ),
+                to_strings(&[
+                    "wop",
+                    "build",
+                    "foo.rs",
+                    "--target",
+                    "wasm32-unknown-unknown"
+                ]),
+            );
+        }
     }
 }
 
