@@ -47,14 +47,15 @@ Some commands use additional rules:
 
 - `new`: create a new source file based on templates. Run `cargo wop new` to get
   a list of all available templates. Run `cargo wop new template SOURCE.rs` to
-  create the file.
+  create the file. For example use `cargo wop new --lib SOURCE.rs` to create a
+  shared library
 - `run`: all arguments are passed per default to the script, not to cargo. To
   pass arguments to `cargo` place them before a `--`. For example: `cargo wop
   run my-script.rs --debug -- ...`
 - `build`: is executed twice. Once to build the package and a second time to
   determine the generated build artifacts and copy them into the local folder
 - `build` and `run` default to release builds. To disable this behavior, use the
-  `build-debug` and `run-debug` commands.
+  `build-debug` and `run-debug` commands
 - `install`: no manifest path is added, but the `--path` argument to the
   manifest directory
 
@@ -70,7 +71,7 @@ used). It can be configured via
 //! ```cargo
 //! [cargo-wop]
 //! default-action = [COMMAND, ..ARGS]
-//!```
+//! ```
 ```
 
 It is interpreted as `COMMAND FILE ..ARGS ..CLI_ARGS`, where `CLI_ARGS` are the

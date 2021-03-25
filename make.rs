@@ -33,7 +33,7 @@ fn main() -> Result<()> {
             };
 
             run(&[cargo_wop_exe, "wop", "test", "cargo-wop.rs"])?;
-            // run(&["./cargo-wop", "wop", "write-manifest", "cargo-wop.rs"])?;
+            run(&[cargo_wop_exe, "wop", "write-manifest", "cargo-wop.rs"])?;
             run(&["cargo", "test"])?;
             run(&["cargo", "build"])?;
         }

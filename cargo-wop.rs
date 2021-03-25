@@ -156,15 +156,6 @@ mod argparse {
         New(String, PathBuf),
     }
 
-    impl Args {
-        pub fn is_write_manifest(&self) -> bool {
-            match self {
-                Args::WriteManifest(_) => true,
-                _ => false,
-            }
-        }
-    }
-
     #[derive(Debug, PartialEq)]
     pub struct DefaultAction {
         pub target: PathBuf,
@@ -371,9 +362,9 @@ In addition the following extra commands are supported:
 
     const TEMPLATES_TEXT: &str = r##"The following templates are available:
 
-- "bin": an executable
-- "lib": a library
-- "pymodule": a library using PyO3 that compiles to a Python extension module
+- "--bin": an executable
+- "--lib": a library
+- "--pymodule": a library using PyO3 that compiles to a Python extension module
 "##;
 
     pub fn execute_args(args: Args, env: &impl ExecutionEnv) -> Result<i32> {
@@ -419,22 +410,27 @@ In addition the following extra commands are supported:
                 let exit_code = command.status()?.code().unwrap_or_default();
                 Ok(exit_code)
             }
-            Args::Manifest(target) | Args::WriteManifest(target) => {
-                // TODO: remove the duplication of file + parse + normalize?
+            Args::Manifest(target) => {
                 let file =
                     File::open(target.as_path()).context("Error while opening manifest path")?;
                 let manifest = parse_manifest(file).context("Error while parsing manifest path")?;
                 let manifest = normalize_manifest(manifest, target.as_path(), env)
                     .context("Error during normalizing manifest")?;
 
-                if args.is_write_manifest() {
-                    use std::io::Write;
+                print!("{}", toml::to_string(&manifest)?);
+                Ok(0)
+            }
+            Args::WriteManifest(target) => {
+                let env = super::execution_env::LocalEnv::from_env(env);
+                let file =
+                    File::open(target.as_path()).context("Error while opening manifest path")?;
+                let manifest = parse_manifest(file).context("Error while parsing manifest path")?;
+                let manifest = normalize_manifest(manifest, target.as_path(), &env)
+                    .context("Error during normalizing manifest")?;
 
-                    let mut file = File::create("Cargo.toml")?;
-                    write!(file, "{}", toml::to_string(&manifest)?)?;
-                } else {
-                    print!("{}", toml::to_string(&manifest)?);
-                }
+                use std::io::Write;
+                let mut file = File::create("Cargo.toml")?;
+                write!(file, "{}", toml::to_string(&manifest)?)?;
 
                 Ok(0)
             }
@@ -499,9 +495,9 @@ In addition the following extra commands are supported:
     ///
     fn render_new_file(template: &str, target: &Path) -> Result<String> {
         let template = match template {
-            "bin" => super::templates::BIN,
-            "lib" => super::templates::LIB,
-            "pymodule" => super::templates::PYMODULE,
+            "--bin" => super::templates::BIN,
+            "--lib" => super::templates::LIB,
+            "--pymodule" => super::templates::PYMODULE,
             _ => bail!("Unknown template '{}'", template),
         };
 
@@ -836,11 +832,12 @@ mod execution_env {
     ///
     /// It's defined as a trait to mock it out in tests.
     ///
-    pub trait ExecutionEnv {
+    pub trait ExecutionEnv: Clone {
         fn get_cargo_home_dir(&self) -> PathBuf;
         fn normalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf>;
     }
 
+    #[derive(Clone)]
     pub struct StdExecutionEnv {
         working_directory: PathBuf,
         cargo_directory: PathBuf,
@@ -867,6 +864,29 @@ mod execution_env {
                 .canonicalize()
                 .with_context(|| format!("Cannot canonicalize {}", p.display()))?;
             Ok(p)
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct LocalEnv {
+        cargo_directory: PathBuf,
+    }
+
+    impl LocalEnv {
+        pub fn from_env(env: &impl ExecutionEnv) -> Self {
+            Self {
+                cargo_directory: env.get_cargo_home_dir(),
+            }
+        }
+    }
+
+    impl ExecutionEnv for LocalEnv {
+        fn get_cargo_home_dir(&self) -> PathBuf {
+            self.cargo_directory.clone()
+        }
+
+        fn normalize<P: AsRef<Path>>(&self, path: P) -> Result<PathBuf> {
+            Ok(path.as_ref().into())
         }
     }
 
@@ -1255,7 +1275,7 @@ fn main() {
 //! This library can be built with `cargo wop`:
 //!
 //! ```bash
-//! cargo wop build %NAME%.rs
+//! cargo wop %NAME%.rs
 //! ```
 //!
 //! ```cargo
@@ -1265,6 +1285,9 @@ fn main() {
 //!
 //! [dependencies]
 //! # include additional dependencies here
+//!
+//! [cargo-wop]
+//! default-action = ["build"]
 //! ```
 
 #[no_mangle]
@@ -1278,7 +1301,7 @@ pub extern "C" fn add(a: i64, b: i64) -> i64 {
 //! This module can be built with `cargo wop` and imported with Python:
 //!
 //! ```bash
-//! cargo wop build %NAME%.rs
+//! cargo wop %NAME%.rs
 //! python -c 'import %NAME%'
 //! ```
 //!
@@ -1290,8 +1313,9 @@ pub extern "C" fn add(a: i64, b: i64) -> i64 {
 //! [dependencies]
 //! pyo3 = { version = "0.13", features = ["extension-module"] }
 //!
-//! [cargo-wop.filter]
-//! "lib%NAME%.so" = "%NAME%.so"
+//! [cargo-wop]
+//! default-action = ["build"]
+//! filter = { "lib%NAME%.so" = "%NAME%.so" }
 //! ```
 #![allow(unused)]
 fn main() {
