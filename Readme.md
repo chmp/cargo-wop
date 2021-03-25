@@ -8,7 +8,7 @@ inspired by [cargo-script][cargo-script], [cargo-eval][cargo-eval]. In contrast
 to these projects, `cargo-wop` is designed to be as close as possible to cargo
 and support all sensible arguments.
 
-Run a file as a script:
+Run a file as a script (or the [default command](#how-arguments-are-interpreted)):
 
 ```bash
 cargo wop my-script.rs
@@ -60,8 +60,21 @@ Some commands use additional rules:
 
 Custom commands:
 
-- `exec` execute the command after the source inside the manifest directory
 - `manifest`: print out the generated manifest
+- `write-manifest`: write the manifest into the current working directory
+
+If no command is specified the default command (`run` without configuration is
+used). It can be configured via
+
+```toml
+//! [cargo-wop]
+//! default-action = [COMMAND, ..ARGS]
+```
+
+It is interpreted as `COMMAND FILE ..ARGS ..CLI_ARGS`, where `CLI_ARGS` are the
+arguments passed via the command line. Without configuration, it corresponds to
+`default-action = ["run"]`. To build the given file as a wasm32 library set it
+to `default-action = ["build", "--target", "wasm32-unknown--unknown"]`.
 
 ## Specifying dependencies
 
@@ -106,6 +119,34 @@ This script can be built into a library via:
 ```bash
 cargo wop build my-script.rs
 ```
+
+# Using cargo wop as a VS Code build command
+
+To setup cargo wop as build command in VS Code, that can be accessed via
+"Ctrl-Shift-B", create the file `.vscode/tasks.json` with the following
+contents:
+
+```json
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "cargo wop",
+            "type": "process",
+            "command": "cargo",
+            "args": ["wop", "${file}"],
+            "group": "build",
+            "options": {"cwd": "${fileDirname}"},
+            "problemMatcher": ["$rustc"]
+        }
+    ]
+}
+```
+
+The `task.json` is documented [here][task-json]. Now pressing "Ctrl-Shift-B" and
+selecting cargo wop will execute the currently opened file using cargo wop.
+
+[task-json]: https://go.microsoft.com/fwlink/?LinkId=733558
 
 # Development tasks
 
