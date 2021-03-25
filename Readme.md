@@ -66,9 +66,11 @@ Custom commands:
 If no command is specified the default command (`run` without configuration is
 used). It can be configured via
 
-```toml
+```rust
+//! ```cargo
 //! [cargo-wop]
 //! default-action = [COMMAND, ..ARGS]
+//!```
 ```
 
 It is interpreted as `COMMAND FILE ..ARGS ..CLI_ARGS`, where `CLI_ARGS` are the
