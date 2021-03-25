@@ -26,8 +26,14 @@ fn main() -> Result<()> {
             // NOTE: use build instead of install, since install does not work
             // on windows as we cannot overwrite the cargo-wop executable as it
             // is running
-            run(&["./cargo-wop", "wop", "test", "cargo-wop.rs"])?;
-            run(&["./cargo-wop", "wop", "write-manifest", "cargo-wop.rs"])?;
+            let cargo_wop_exe = if std::env::consts::FAMILY == "windows" {
+                "./cargo-wop.exe"
+            } else {
+                "./cargo-wop"
+            };
+
+            run(&[cargo_wop_exe, "wop", "test", "cargo-wop.rs"])?;
+            // run(&["./cargo-wop", "wop", "write-manifest", "cargo-wop.rs"])?;
             run(&["cargo", "test"])?;
             run(&["cargo", "build"])?;
         }
