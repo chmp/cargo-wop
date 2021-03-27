@@ -137,13 +137,9 @@ mod argparse {
     pub enum Args {
         /// Execute the default action
         DefaultAction(DefaultAction),
-
         /// Execute a direct cargo command
         GenericCargoCall(CargoCall),
         /// A build step
-        ///
-        /// It can safely be executed a second time with `--message-format json` to
-        /// get the build artifacts
         BuildCargoCall(CargoCall),
         /// A install step that gets passed the manifest dir not the file
         InstallCargoCall(CargoCall),
