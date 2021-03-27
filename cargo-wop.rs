@@ -97,7 +97,7 @@ mod argparse {
                 Args::Help
             }
             "new" => {
-                if rest_args.len() == 0 {
+                if rest_args.is_empty() {
                     Args::ListTemplates
                 } else if rest_args.len() == 2 {
                     let template = rest_args[0]
@@ -281,12 +281,25 @@ mod argparse {
     }
 
     fn is_cargo_command(command: &str) -> bool {
-        match command {
-            "bench" | "build" | "build-debug" | "check" | "clean" | "clippy" | "fmt"
-            | "install" | "locate-project" | "metadata" | "pkgid" | "run" | "run-debug"
-            | "tree" | "test" | "verify-project" => true,
-            _ => false,
-        }
+        matches!(
+            command,
+            "bench"
+                | "build"
+                | "build-debug"
+                | "check"
+                | "clean"
+                | "clippy"
+                | "fmt"
+                | "install"
+                | "locate-project"
+                | "metadata"
+                | "pkgid"
+                | "run"
+                | "run-debug"
+                | "tree"
+                | "test"
+                | "verify-project"
+        )
     }
 }
 
@@ -487,7 +500,7 @@ In addition the following extra commands are supported:
         let mut res = String::new();
         for (i, arg) in args.iter().enumerate() {
             if i != 0 {
-                res.push_str(" ");
+                res.push(' ');
             }
             res.push_str(arg.to_string_lossy().as_ref());
         }
@@ -1070,7 +1083,7 @@ mod manifest_normalization {
         let bin = target
             .as_table_mut()
             .ok_or_else(|| anyhow!("Cannot patch non table target"))?;
-        bin.insert(String::from("path"), Value::String(path.to_owned()));
+        bin.insert(String::from("path"), Value::String(path));
 
         if !bin.contains_key("name") {
             bin.insert(String::from("name"), Value::String(name.to_owned()));
@@ -1136,7 +1149,7 @@ mod manifest_normalization {
             Value::Array(current) => {
                 // TODO: improve error message
                 ensure!(
-                    path[depth] == "",
+                    path[depth].is_empty(),
                     "Unexpected array in path {:?}",
                     &path[..depth + 1]
                 );
@@ -1145,7 +1158,7 @@ mod manifest_normalization {
                 }
             }
             Value::Table(current) => {
-                if path[depth] == "" {
+                if path[depth].is_empty() {
                     for (_, item) in current {
                         _normalize_paths(item, project_source_path, env, path, depth + 1)?;
                     }
