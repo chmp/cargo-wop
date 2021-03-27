@@ -51,7 +51,7 @@ Some commands use additional rules:
   shared library
 - `run`: all arguments are passed per default to the script, not to cargo. To
   pass arguments to `cargo` place them before a `--`. For example: `cargo wop
-  run my-script.rs --debug -- ...`
+  run my-script.rs --verbose -- ...`
 - `build`: is executed twice. Once to build the package and a second time to
   determine the generated build artifacts and copy them into the local folder
 - `build` and `run` default to release builds. To disable this behavior, use the
@@ -64,8 +64,8 @@ Custom commands:
 - `manifest`: print out the generated manifest
 - `write-manifest`: write the manifest into the current working directory
 
-If no command is specified the default command (`run` without configuration is
-used). It can be configured via
+If no command is specified the default command. Without additional configuration
+it is set to `run`. It can be configured via
 
 ```rust
 //! ```cargo
@@ -76,8 +76,9 @@ used). It can be configured via
 
 It is interpreted as `COMMAND FILE ..ARGS ..CLI_ARGS`, where `CLI_ARGS` are the
 arguments passed via the command line. Without configuration, it corresponds to
-`default-action = ["run"]`. To build the given file as a wasm32 library set it
-to `default-action = ["build", "--target", "wasm32-unknown--unknown"]`.
+`default-action = ["run"]`. For example, to build the given file as a wasm32
+library set it to `default-action = ["build", "--target",
+"wasm32-unknown--unknown"]`.
 
 ## Specifying dependencies
 
