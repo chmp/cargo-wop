@@ -2,13 +2,13 @@
 
 **WARNING:** this package is experimental at the moment.
 
-Rust source files as self-contained projects. `cargo-wop` allows to `cargo` work
-with rust source file as if thy were full projects.   This project is heavily
+Rust source files as self-contained projects. `cargo-wop` allows `cargo`to work
+with rust source file as if thy were full projects. This project is heavily
 inspired by [cargo-script][cargo-script], [cargo-eval][cargo-eval]. In contrast
 to these projects, `cargo-wop` is designed to be as close as possible to cargo
-and support all sensible arguments.
+and support all sensible subcommands.
 
-Run a file as a script (or the [default command](#how-arguments-are-interpreted)):
+Run a file as a script:
 
 ```bash
 cargo wop my-script.rs
@@ -23,17 +23,15 @@ Build artifacts defined in the script:
 cargo wop build my-script.rs
 ```
 
-Run tests define in the script:
+Run tests defined in the script:
 
 ```
 cargo wop test my-script.rs
 ```
+
 ## How arguments are interpreted
 
-At the moment the following cargo commands are supported: `bench`, `build`,
-`check`, `clean`, `clippy`, `fmt`, `install`, `locate-project`, `metadata`,
-`pkgid`, `run`, `tree`, `test`, `verify-project`. For most commands `cargo-wop`
-rewrites the command line as follows:
+For most commands `cargo-wop` rewrites the command line as follows:
 
 ```bash
 # Original command-line
@@ -43,10 +41,18 @@ cargo wop [cargo-command] [script] [args...]
 cargo [cargo-command] --manifest-path [generated_manifest] [args...]
 ```
 
+The manifest path points to a Cargo.toml file written to the project director in
+`"~/.cargo/wop-cache/"`. The project directory will also contain the `target`
+folder.
+
+At the moment the following cargo commands are supported: `bench`, `build`,
+`check`, `clean`, `clippy`, `fmt`, `install`, `locate-project`, `metadata`,
+`pkgid`, `run`, `tree`, `test`, `verify-project`. 
+
 Some commands use additional rules:
 
 - `new`: create a new source file based on templates. Run `cargo wop new` to get
-  a list of all available templates. Run `cargo wop new template SOURCE.rs` to
+  a list of all available templates. Run `cargo wop new TEMPLATE SOURCE.rs` to
   create the file. For example use `cargo wop new --lib SOURCE.rs` to create a
   shared library
 - `run`: all arguments are passed per default to the script, not to cargo. To
@@ -64,21 +70,8 @@ Custom commands:
 - `manifest`: print out the generated manifest
 - `write-manifest`: write the manifest into the current working directory
 
-If no command is specified the default command. Without additional configuration
-it is set to `run`. It can be configured via
-
-```rust
-//! ```cargo
-//! [cargo-wop]
-//! default-action = [COMMAND, ..ARGS]
-//! ```
-```
-
-It is interpreted as `COMMAND FILE ..ARGS ..CLI_ARGS`, where `CLI_ARGS` are the
-arguments passed via the command line. Without configuration, it corresponds to
-`default-action = ["run"]`. For example, to build the given file as a wasm32
-library set it to `default-action = ["build", "--target",
-"wasm32-unknown--unknown"]`.
+If no command is specified, the default command is executed, `run` without
+additional configuration.
 
 ## Specifying dependencies
 
@@ -123,6 +116,24 @@ This script can be built into a library via:
 ```bash
 cargo wop build my-script.rs
 ```
+
+## Configure the default action
+
+The default action can be configured by setting the `"default-action"` array in
+the embedded manifest file:
+
+```rust
+//! ```cargo
+//! [cargo-wop]
+//! default-action = [COMMAND, ..ARGS]
+//! ```
+```
+
+It is interpreted as `COMMAND FILE ..ARGS ..CLI_ARGS`, where `CLI_ARGS` are the
+arguments passed via the command line. Without configuration, it corresponds to
+`default-action = ["run"]`. For example, to build the given file as a wasm32
+library set it to `default-action = ["build", "--target",
+"wasm32-unknown--unknown"]`.
 
 # Using cargo wop as a VS Code build command
 
