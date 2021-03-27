@@ -338,51 +338,6 @@ mod execution {
         };
     }
 
-    const HELP_TEXT: &str = r##"cargo wop -- cargo without project
-
-Run the rust source file as a script:
-
-    cargo wop SOURCE.rs
-    cargo wop run SOURCE.rs
-    cargo wop run SOURCE.rs [SCRIPT ARGUMENTS ...]
-    cargo wop run SOURCE.rs [CARGO ARGUMENTS ...] -- [SCRIPT ARGUMENTS ...]
-
-Build the included targets, executables or libraries:
-
-    cargo wop build SOURCE.rs [CARGO ARGUMENTS ...]
-
-Per default run and build use release builds. Use the run-debug / build-debug
-commands for debug builds.
-
-cargo wop supports the following cargo commands:
-
-    bench check clean clippy fmt install locate-project metadata pkgid tree
-    test verify-project
-
-They can be executed as
-
-    cargo wop COMMAND SOURCE.rs [CARGO ARGUMENTS ...]
-
-In addition the following extra commands are supported:
-
-    cargo wop manifest SOURCE.rs        - Show the generated manifest file
-    cargo wop write-manifest SOURCE.rs  - Write the generated manifest to the
-                                          current directory as Cargo.toml
-    cargo wop new                       - List available templates to create
-                                          a new file
-    cargo wop new TEMPLATE SOURCE.rs    - Create the file SOURCE.rs using the
-                                          given template
-    cargo wop help                      - Show this help text
-    cargo wop --help
-"##;
-
-    const TEMPLATES_TEXT: &str = r##"The following templates are available:
-
-- "--bin": an executable
-- "--lib": a library
-- "--pymodule": a library using PyO3 that compiles to a Python extension module
-"##;
-
     pub fn execute_args(args: Args, env: &impl ExecutionEnv) -> Result<i32> {
         match &args {
             Args::DefaultAction(call) => {
@@ -451,11 +406,11 @@ In addition the following extra commands are supported:
                 Ok(0)
             }
             Args::Help => {
-                println!("{}", HELP_TEXT);
+                println!("{}", super::text::HELP);
                 Ok(0)
             }
             Args::ListTemplates => {
-                println!("{}", TEMPLATES_TEXT);
+                println!("{}", super::text::HELP_TEMPLATES);
                 Ok(0)
             }
             Args::New(template, target) => {
@@ -511,9 +466,9 @@ In addition the following extra commands are supported:
     ///
     fn render_new_file(template: &str, target: &Path) -> Result<String> {
         let template = match template {
-            "--bin" => super::templates::BIN,
-            "--lib" => super::templates::LIB,
-            "--pymodule" => super::templates::PYMODULE,
+            "--bin" => super::text::TEMPLATE_BIN,
+            "--lib" => super::text::TEMPLATE_LIB,
+            "--pymodule" => super::text::TEMPLATE_PYMODULE,
             _ => bail!("Unknown template '{}'", template),
         };
 
@@ -1343,8 +1298,8 @@ mod util {
     }
 }
 
-mod templates {
-    pub const BIN: &str = r##"//! Executable %NAME%
+mod text {
+    pub const TEMPLATE_BIN: &str = r##"//! Executable %NAME%
 //!
 //! ```cargo
 //! [dependencies]
@@ -1356,7 +1311,7 @@ fn main() {
 }
 "##;
 
-    pub const LIB: &str = r##"//! Shared library %NAME%
+    pub const TEMPLATE_LIB: &str = r##"//! Shared library %NAME%
 //!
 //! This library can be built with `cargo wop`:
 //!
@@ -1382,7 +1337,7 @@ pub extern "C" fn add(a: i64, b: i64) -> i64 {
 }
 "##;
 
-    pub const PYMODULE: &str = r##"//! Python extension module %NAME%
+    pub const TEMPLATE_PYMODULE: &str = r##"//! Python extension module %NAME%
 //!
 //! This module can be built with `cargo wop` and imported with Python:
 //!
@@ -1419,6 +1374,51 @@ fn main() {
         Ok(())
     }
 }
+"##;
+
+    pub const HELP: &str = r##"cargo wop -- cargo without project
+
+Run the rust source file as a script:
+
+    cargo wop SOURCE.rs
+    cargo wop run SOURCE.rs
+    cargo wop run SOURCE.rs [SCRIPT ARGUMENTS ...]
+    cargo wop run SOURCE.rs [CARGO ARGUMENTS ...] -- [SCRIPT ARGUMENTS ...]
+
+Build the included targets, executables or libraries:
+
+    cargo wop build SOURCE.rs [CARGO ARGUMENTS ...]
+
+Per default run and build use release builds. Use the run-debug / build-debug
+commands for debug builds.
+
+cargo wop supports the following cargo commands:
+
+    bench check clean clippy fmt install locate-project metadata pkgid tree
+    test verify-project
+
+They can be executed as
+
+    cargo wop COMMAND SOURCE.rs [CARGO ARGUMENTS ...]
+
+In addition the following extra commands are supported:
+
+    cargo wop manifest SOURCE.rs        - Show the generated manifest file
+    cargo wop write-manifest SOURCE.rs  - Write the generated manifest to the
+                                          current directory as Cargo.toml
+    cargo wop new                       - List available templates to create
+                                          a new file
+    cargo wop new TEMPLATE SOURCE.rs    - Create the file SOURCE.rs using the
+                                          given template
+    cargo wop help                      - Show this help text
+    cargo wop --help
+"##;
+
+    pub const HELP_TEMPLATES: &str = r##"The following templates are available:
+
+- "--bin": an executable
+- "--lib": a library
+- "--pymodule": a library using PyO3 that compiles to a Python extension module
 "##;
 }
 
