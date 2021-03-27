@@ -21,6 +21,9 @@
 //! serde_json = "1.0"
 //! sha1 = "0.6.0"
 //! toml = { version = "0.5", features = ["preserve_order"] }
+//!
+//! [cargo-wop]
+//! filter = {  "cargo_wop.pdb" = "" }
 //! ```
 //!
 use anyhow::Result;
@@ -736,6 +739,7 @@ In addition the following extra commands are supported:
     ///
     fn find_project_dir(source: impl AsRef<Path>, env: &impl ExecutionEnv) -> Result<PathBuf> {
         let source = source.as_ref();
+        let source = env.normalize(source)?;
 
         let target_name = source
             .file_stem()
@@ -921,8 +925,8 @@ mod execution_env {
 mod manifest_normalization {
     use std::path::Path;
 
-    use anyhow::{anyhow, Context, Result};
-    use toml::Value;
+    use anyhow::{anyhow, bail, ensure, Context, Result};
+    use toml::{value::Table, Value};
 
     use super::{execution_env::ExecutionEnv, util::to_utf8_string};
 
@@ -959,8 +963,8 @@ mod manifest_normalization {
 
         patch_all_targets(root, target_path, &target_name, env)
             .context("Error while patching the targets")?;
-        patch_all_dependencies(root, &target_directory, env)
-            .context("Error while patching the dependencies")?;
+        normalize_paths(root, &target_directory, env)
+            .context("Error while normalizing the file paths")?;
 
         Ok(manifest)
     }
@@ -1075,46 +1079,115 @@ mod manifest_normalization {
         Ok(())
     }
 
-    /// Replace all path dependencies with absolute paths
+    /// The key path & mode for normalization
     ///
-    fn patch_all_dependencies(
+    /// Use an empty path to denote arrays or arbitrary children. All paths are
+    /// interpreted as relative to the project source path.
+    ///
+    const PATH_NORMALIZATION: &[&[&str]] = &[
+        &["lib", "path"],
+        &["bin", "", "path"],
+        &["example", "", "path"],
+        &["test", "", "path"],
+        &["bench", "", "path"],
+        &["package", "build"],
+        &["dependencies", "", "path"],
+        &["dev-dependencies", "", "path"],
+        &["build-dependencies", "", "path"],
+        &["patch", "", "", "path"],
+        &["target", "", "dependencies", "", "path"],
+    ];
+
+    fn normalize_paths(
         root: &mut toml::map::Map<String, Value>,
         project_source_path: impl AsRef<Path>,
         env: &impl ExecutionEnv,
     ) -> Result<()> {
         let project_source_path = project_source_path.as_ref();
+        for path in PATH_NORMALIZATION.iter().copied() {
+            let child = match root.get_mut(path[0]) {
+                Some(child) => child,
+                None => continue,
+            };
+            _normalize_paths(child, project_source_path, env, path, 1)?;
+        }
+        Ok(())
+    }
 
-        for dep_root_key in &["dependencies", "dev-dependencies", "build-dependencies"] {
-            if let Some(dep_root) = root.get_mut(*dep_root_key) {
-                let dep_root = dep_root
-                    .as_table_mut()
-                    .ok_or_else(|| anyhow!("Invalid manifest {} not an array", *dep_root_key))?;
+    fn _normalize_paths(
+        current: &mut Value,
+        project_source_path: &Path,
+        env: &impl ExecutionEnv,
+        path: &[&str],
+        depth: usize,
+    ) -> Result<()> {
+        if depth + 1 == path.len() {
+            let current = match current.as_table_mut() {
+                Some(current) => current,
+                // NOTE: the containing item does not need to be table, e.g.,
+                // when the dependency is directly assigned to a version
+                None => return Ok(()),
+            };
 
-                for dep in dep_root {
-                    let dep = dep.1;
-                    let dep = match dep.as_table_mut() {
-                        Some(dep) => dep,
-                        None => continue,
-                    };
-
-                    if !dep.contains_key("path") {
-                        continue;
-                    }
-
-                    let path = dep
-                        .get("path")
-                        .unwrap()
-                        .as_str()
-                        .ok_or_else(|| anyhow!("Invalid manifest: non string path"))?;
-                    let path = env.normalize(project_source_path.join(path))?;
-
-                    let path = path
-                        .to_str()
-                        .ok_or_else(|| anyhow!("Cannot interpret dependency path a string"))?;
-                    dep.insert(String::from("path"), path.into());
+            _normalize_table_item(current, project_source_path, env, path[depth])?;
+            return Ok(());
+        }
+        match current {
+            Value::Array(current) => {
+                // TODO: improve error message
+                ensure!(
+                    path[depth] == "",
+                    "Unexpected array in path {:?}",
+                    &path[..depth + 1]
+                );
+                for item in current {
+                    _normalize_paths(item, project_source_path, env, path, depth + 1)?;
                 }
             }
+            Value::Table(current) => {
+                if path[depth] == "" {
+                    for (_, item) in current {
+                        _normalize_paths(item, project_source_path, env, path, depth + 1)?;
+                    }
+                } else if current.contains_key(path[depth]) {
+                    _normalize_paths(
+                        &mut current[path[depth]],
+                        project_source_path,
+                        env,
+                        path,
+                        depth + 1,
+                    )?;
+                }
+            }
+            // TODO: improve error message
+            _ => bail!("Invalid value type"),
         }
+
+        Ok(())
+    }
+
+    fn _normalize_table_item(
+        current: &mut Table,
+        project_source_path: &Path,
+        env: &impl ExecutionEnv,
+        key: &str,
+    ) -> Result<()> {
+        if !current.contains_key(key) {
+            return Ok(());
+        }
+
+        let normed_path = current
+            .get(key)
+            .unwrap()
+            .as_str()
+            .ok_or_else(|| anyhow!("Invalid manifest: non string path"))?;
+        let normed_path = env.normalize(project_source_path.join(normed_path))?;
+
+        let normed_path = normed_path
+            .to_str()
+            .ok_or_else(|| anyhow!("Cannot interpret dependency path a string"))?;
+
+        current[key] = normed_path.into();
 
         Ok(())
     }
