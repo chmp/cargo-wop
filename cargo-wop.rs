@@ -465,6 +465,7 @@ mod execution {
             "--bin" => super::text::TEMPLATE_BIN,
             "--lib" => super::text::TEMPLATE_LIB,
             "--pymodule" => super::text::TEMPLATE_PYMODULE,
+            "--wasm" => super::text::TEMPLATE_WASM,
             _ => bail!("Unknown template '{}'", template),
         };
 
@@ -1372,6 +1373,32 @@ fn main() {
 }
 "##;
 
+    pub const TEMPLATE_WASM: &str = r##"//! WASM module %NAME%
+//!
+//! This library can be built with `cargo wop`:
+//!
+//! ```bash
+//! cargo wop %NAME%.rs
+//! ```
+//!
+//! ```cargo
+//! [lib]
+//! name = "%NAME%"
+//! crate-type = ["cdylib"]
+//!
+//! [dependencies]
+//! # include additional dependencies here
+//!
+//! [cargo-wop]
+//! default-action = ["build", "--target", "wasm32-unknown-unknown"]
+//! ```
+
+#[no_mangle]
+pub extern "C" fn add(a: i64, b: i64) -> i64 {
+    a + b
+}
+"##;
+
     pub const HELP: &str = r##"cargo wop -- cargo without project
 
 Run the rust source file as a script:
@@ -1415,6 +1442,7 @@ In addition the following extra commands are supported:
 - "--bin": an executable
 - "--lib": a library
 - "--pymodule": a library using PyO3 that compiles to a Python extension module
+- "--wasm": a standalone wasm32 module
 "##;
 }
 
