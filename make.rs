@@ -24,8 +24,8 @@ fn main() -> Result<()> {
             // use cargo-wop to execute cargo-wop to test / write the manifest
             //
             // NOTE: use build instead of install, since install does not work
-            // on windows as we cannot overwrite the cargo-wop executable as it
-            // is running
+            // on windows as we cannot overwrite the cargo-wop executable while
+            // it is running
             let cargo_wop_exe = if std::env::consts::FAMILY == "windows" {
                 "./cargo-wop.exe"
             } else {

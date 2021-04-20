@@ -1,6 +1,7 @@
 # `cargo-wop` - cargo without project
 
-**WARNING:** this package is experimental at the moment.
+**WARNING:** this package is experimental at the moment. It should already be
+usable, but the interface is still in flux.
 
 Rust source files as self-contained projects. `cargo-wop` allows `cargo`to work
 with rust source file as if thy were full projects. This project is heavily
@@ -73,7 +74,9 @@ Custom commands:
 If no command is specified, the default command is executed, `run` without
 additional configuration.
 
-## Specifying dependencies
+## Configuration
+
+### Specifying dependencies
 
 Dependencies are described in a cargo manifest embedded in the top-level
 comment. Importantly, the file must start with the comment for the manifest to
@@ -88,6 +91,8 @@ be recognized. For example:
 //! ```
 //!
 ```
+
+### Additional settings
 
 The embedded manifest can contain any keys recognized by cargo. `cargo-wop`
 normalizes this manifest and makes sure the source file is correctly included.
@@ -117,7 +122,7 @@ This script can be built into a library via:
 cargo wop build my-script.rs
 ```
 
-## Configure the default action
+### Default actions
 
 The default action can be configured by setting the `"default-action"` array in
 the embedded manifest file:
@@ -132,8 +137,39 @@ the embedded manifest file:
 It is interpreted as `COMMAND FILE ..ARGS ..CLI_ARGS`, where `CLI_ARGS` are the
 arguments passed via the command line. Without configuration, it corresponds to
 `default-action = ["run"]`. For example, to build the given file as a wasm32
-library set it to `default-action = ["build", "--target",
-"wasm32-unknown--unknown"]`.
+library configure it as
+
+```
+//! ```cargo
+//! [cargo-wop]
+//! default-action = ["build", "--target", "wasm32-unknown--unknown"]
+//! ```
+```
+
+### File filters
+
+For some applications it is helpful to rename the generated files. For example
+PyO3 extensions need to be stripped of their "lib" prefix on Linux systems.
+Cargo wop supports renaming files by specifying a filter dictionary
+
+```rust
+//! [cargo-wop]
+//! filter = {  "libexample.so" = "example.so" }
+//! ```
+```
+
+To not copy files into the current directory, map them to an empty string. For
+example, to not copy the debug information on Windows, use
+
+```rust
+//! [cargo-wop]
+//! filter = {  "example.pdb" = "" }
+//! ```
+```
+
+The files that are specified in the mapping do not need to be part of the build.
+Therefore, it is safe to include platform specific renames even in
+cross-platform files.
 
 # Using cargo wop as a VS Code build command
 
