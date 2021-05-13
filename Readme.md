@@ -227,9 +227,37 @@ contents:
             "args": ["wop", "${file}"],
             "group": "build",
             "options": {"cwd": "${fileDirname}"},
-            "problemMatcher": ["$rustc"]
+            "problemMatcher": ["$rustc"],
+            "presentation": {"focus": true}
+        },
+        {
+            "label": "cargo wop [task]",
+            "type": "process",
+            "command": "cargo",
+            "args": ["wop", "${input:task}", "${file}"],
+            "group": "build",
+            "options": {"cwd": "${fileDirname}"},
+            "problemMatcher": ["$rustc"],
+            "presentation": {"focus": true}
         }
-    ]
+    ],
+    "inputs": [
+        {
+          "type": "pickString",
+          "id": "task",
+          "description": "What task to run?",
+          "options": [
+            "build",
+            "clippy",
+            "clean",
+            "fmt",
+            "install",
+            "test",
+            "run"
+          ],
+          "default": "fmt"
+        }
+      ]
 }
 ```
 
