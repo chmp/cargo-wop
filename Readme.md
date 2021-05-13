@@ -48,7 +48,7 @@ folder.
 
 At the moment the following cargo commands are supported: `bench`, `build`,
 `check`, `clean`, `clippy`, `fmt`, `install`, `locate-project`, `metadata`,
-`pkgid`, `run`, `tree`, `test`, `verify-project`. 
+`pkgid`, `run`, `tree`, `test`, `verify-project`.
 
 Some commands use additional rules:
 
@@ -170,6 +170,33 @@ example, to not copy the debug information on Windows, use
 The files that are specified in the mapping do not need to be part of the build.
 Therefore, it is safe to include platform specific renames even in
 cross-platform files.
+
+### Build scripts
+
+[Build scripts][build-scripts] can be configured by setting the `package.build`
+key to a script relative to the source file. For example:
+
+```rust
+//! [package]
+//! build = "example_build.rs"
+```
+
+Note, that cargo executes the build script in the generated project directory in
+which the manifest is found, not the directory containing the script. On option,
+to use paths relative to the build script, is to change the directory at the
+start of the build script. Using the standard [`file!()`][file-macro] macro:
+
+```rust
+fn main() {
+    let self_path = std::path::PathBuf::from(file!());
+    std::env::set_current_dir(self_path.parent().unwrap()).unwrap();
+
+    // ...
+}
+```
+
+[build-scripts]: https://doc.rust-lang.org/cargo/reference/build-scripts.html
+[file-macro]: https://doc.rust-lang.org/stable/std/macro.file.html
 
 # Using cargo wop as a VS Code build command
 
