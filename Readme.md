@@ -255,8 +255,10 @@ Run `cargo wop make.rs help` to a see a list of available commands.
 - [cargo-script][cargo-script] and forks of it [cargo-scripter][cargo-scripter],
   [cargo-eval][cargo-eval]
 - [cargo-play][cargo-play]
+- [cargo-temp][cargo-temp]
 
 [cargo-script]: https://github.com/DanielKeep/cargo-script
 [cargo-eval]: https://github.com/reitermarkus/cargo-eval
 [cargo-play]: https://crates.io/crates/cargo-play
 [cargo-scripter]: https://crates.io/crates/cargo-scripter
+[cargo-temp]: https://github.com/yozhgoor/cargo-temp
