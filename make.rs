@@ -6,18 +6,16 @@
 //! ```cargo
 //! [dependencies]
 //! anyhow = "1.0"
-//! clap = "3.0.0-beta.2"
 //! ```
 use std::{ffi::OsStr, fmt::Debug, fs, path::Path, process::Command};
 
 use anyhow::{ensure, Result};
-use clap::Clap;
 
 fn main() -> Result<()> {
-    let task = Task::parse();
+    let task = single(std::env::args().skip(1));
 
-    match task {
-        Task::Precommit => {
+    match task.as_str() {
+        "precommit" => {
             run(&["rustfmt", "make.rs"])?;
             run(&["cargo", "fmt"])?;
             run(&["cargo", "wop", "build", "cargo-wop.rs"])?;
@@ -37,12 +35,13 @@ fn main() -> Result<()> {
             run(&["cargo", "test"])?;
             run(&["cargo", "build"])?;
         }
-        Task::Clean => {
+        "clean" => {
             run(&["cargo", "clean"])?;
             delete_file("./cargo-wop")?;
             delete_file("./cargo-wop.exe")?;
             delete_file("./cargo_wop.pdb")?;
         }
+        _ => panic!("Unknown task {}", task),
     }
     Ok(())
 }
@@ -64,10 +63,10 @@ fn delete_file<P: AsRef<Path>>(path: P) -> Result<()> {
     Ok(())
 }
 
-#[derive(Clap, Debug)]
-enum Task {
-    /// Run common tasks before committing.
-    Precommit,
-    /// Clean the project directory, removing any build files.
-    Clean,
+fn single<I: Iterator>(mut it: I) -> I::Item {
+    let res = it.next().expect("Need at least one item");
+    if it.next().is_some() {
+        panic!("Trailing arguments");
+    }
+    res
 }
