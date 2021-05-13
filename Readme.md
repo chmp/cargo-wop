@@ -1,5 +1,11 @@
 # `cargo-wop` - cargo without project
 
+[How arguments are interpreted](#how-arguments-are-interpreted)
+| [Configuration](#configuration)
+| [Development tasks](#development-tasks)
+| [VS Code build commands](#vs-code-build-commands)
+| [Related projects](#related-projects)
+
 **WARNING:** this package is experimental at the moment. It should already be
 usable, but the interface is still in flux.
 
@@ -75,6 +81,12 @@ If no command is specified, the default command is executed, `run` without
 additional configuration.
 
 ## Configuration
+
+[Specifying dependencies](#specifying-dependencies)
+| [Additional settings](#additional-settings)
+| [Default actions](#default-actions)
+| [File filters](#file-filters)
+| [Build scripts](#build-scripts)
 
 ### Specifying dependencies
 
@@ -198,7 +210,7 @@ fn main() {
 [build-scripts]: https://doc.rust-lang.org/cargo/reference/build-scripts.html
 [file-macro]: https://doc.rust-lang.org/stable/std/macro.file.html
 
-# Using cargo wop as a VS Code build command
+# VS Code build commands
 
 To setup cargo wop as build command in VS Code, that can be accessed via
 "Ctrl-Shift-B", create the file `.vscode/tasks.json` with the following
