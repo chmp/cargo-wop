@@ -80,7 +80,7 @@ additional configuration.
 ## Configuration
 
 [Specifying dependencies](#specifying-dependencies)
-| [Additional settings](#building-libraries)
+| [Building libraries](#building-libraries)
 | [Default actions](#default-actions)
 | [File filters](#file-filters)
 | [Build scripts](#build-scripts)
