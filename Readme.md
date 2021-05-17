@@ -6,9 +6,6 @@
 | [VS Code build commands](#vs-code-build-commands)
 | [Related projects](#related-projects)
 
-**WARNING:** this package is experimental at the moment. It should already be
-usable, but the interface is still in flux.
-
 Rust source files as self-contained projects. `cargo-wop` allows `cargo`to work
 with rust source file as if thy were full projects. This project is heavily
 inspired by [cargo-script][cargo-script], [cargo-eval][cargo-eval]. In contrast
@@ -83,7 +80,7 @@ additional configuration.
 ## Configuration
 
 [Specifying dependencies](#specifying-dependencies)
-| [Additional settings](#additional-settings)
+| [Additional settings](#building-libraries)
 | [Default actions](#default-actions)
 | [File filters](#file-filters)
 | [Build scripts](#build-scripts)
@@ -95,16 +92,23 @@ comment. Importantly, the file must start with the comment for the manifest to
 be recognized. For example:
 
 ```rust
-//! My script
-//!
 //! ```cargo
 //! [dependencies]
 //! serde = "1.0"
 //! ```
-//!
 ```
 
-### Additional settings
+Dependencies can also be local paths relative to the script file by using the
+standard cargo syntax:
+
+```rust
+//! ```cargo
+//! [dependencies]
+//! local_dep = { path = "./local_dep" }
+//! ```
+```
+
+### Building libraries
 
 The embedded manifest can contain any keys recognized by cargo. `cargo-wop`
 normalizes this manifest and makes sure the source file is correctly included.
@@ -194,7 +198,7 @@ key to a script relative to the source file. For example:
 ```
 
 Note, that cargo executes the build script in the generated project directory in
-which the manifest is found, not the directory containing the script. On option,
+which the manifest is found, not the directory containing the script. One option,
 to use paths relative to the build script, is to change the directory at the
 start of the build script. Using the standard [`file!()`][file-macro] macro:
 
