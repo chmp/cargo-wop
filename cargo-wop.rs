@@ -340,7 +340,7 @@ mod execution {
                 let project_info = prepare_manifest_dir(&call.target, env)?;
                 let merged_args = merge_default_args(call, &project_info.options.default_action);
 
-                println!(":: cargo {}", format_default_args(&merged_args));
+                eprintln!(":: cargo {}", format_default_args(&merged_args));
                 let args = super::parse_args(merged_args.into_iter())?;
                 assert!(
                     !matches!(args, Args::DefaultAction(_)),
