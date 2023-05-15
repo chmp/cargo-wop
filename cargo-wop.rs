@@ -870,7 +870,7 @@ mod execution_env {
             return Ok(cargo_home);
         }
 
-        let env_var = if std::env::consts::OS == "windows" {
+        let env_var = if std::env::consts::OS != "windows" {
             "HOME"
         } else {
             "USERPROFILE"
